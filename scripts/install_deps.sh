@@ -2,6 +2,9 @@
 # One-time dependency installation for the ingestion pipeline.
 # Arch Linux + AUR aware. Safe to re-run (--needed / already-installed checks).
 
+# If you do not use arch but you made it this far surely you can work out how to do the needfull 
+
+
 set -euo pipefail
 
 echo "=== System binaries (pacman) ==="
