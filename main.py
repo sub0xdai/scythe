@@ -27,6 +27,7 @@ import subprocess
 import sys
 
 from src.compiler import AudioSpec, compile_graph
+from src.gpu import CPU_PROFILE, dry_run, probe, profile_for
 from src.validator import validate
 
 
@@ -118,6 +119,27 @@ def _detect_audio(project_dir):
     return AudioSpec(soundtrack=os.path.join(audio_dir, soundtrack_files[0]))
 
 
+def _select_profile():
+    """Resolve the hardware profile honoring NOX_GPU and NOX_ENCODER."""
+    gpu_off = os.environ.get("NOX_GPU", "").lower() == "off"
+    forced = os.environ.get("NOX_ENCODER")
+    if gpu_off and forced:
+        print("ERROR: NOX_GPU=off and NOX_ENCODER are mutually exclusive")
+        sys.exit(1)
+    if gpu_off:
+        return CPU_PROFILE
+    if forced:
+        profile = profile_for(forced)
+        if profile is None:
+            print(f"ERROR: unknown encoder '{forced}' (NOX_ENCODER)")
+            sys.exit(1)
+        if not dry_run(forced, profile.extra_args):
+            print(f"ERROR: encoder '{forced}' is not invokable on this machine")
+            sys.exit(1)
+        return profile
+    return probe()
+
+
 # ── Cut-List Mode ─────────────────────────────────────────────────────────
 
 def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=None,
@@ -178,16 +200,19 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
 
     duration = segments[-1]["end"]
     print("Compiling filtergraph...")
-    graph = compile_graph(config, segments, audio, project_dir)
+    print("Probing hardware...")
+    profile = _select_profile()
+    print(f"  Encoder: {profile.encoder}")
+    graph = compile_graph(config, segments, audio, project_dir, profile)
 
-    cmd = ["ffmpeg", "-y"]
+    cmd = ["ffmpeg", "-y", *profile.extra_args]
     for arg_list in graph.input_args:
         cmd.extend(arg_list)
     cmd += ["-filter_complex", graph.filter_complex,
             "-map", graph.video_map]
     if graph.audio_map:
         cmd += ["-map", graph.audio_map]
-    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "23",
+    cmd += ["-c:v", profile.encoder, "-preset", "medium", "-crf", "23",
             "-threads", "4", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
     if graph.audio_map:
         cmd += ["-c:a", "aac"]

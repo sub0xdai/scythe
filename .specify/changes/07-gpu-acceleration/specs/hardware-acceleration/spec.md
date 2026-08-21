@@ -12,6 +12,7 @@ The engine MUST probe ffmpeg for hardware encoders, decoders, and hwaccels in th
 - WHEN the probe runs
 - THEN the profile lists `h264_nvenc` and marks it available
 
+<!-- vox:covered CP-1 -->
 #### Scenario: No GPU degrades
 
 - GIVEN an ffmpeg with no hardware encoders
@@ -22,18 +23,21 @@ The engine MUST probe ffmpeg for hardware encoders, decoders, and hwaccels in th
 
 The chosen encoder MUST be the first available in preference order nvenc, qsv, vaapi, videotoolbox, falling back to `libx264`. Env overrides `NOX_GPU=off|on` and `NOX_ENCODER=<name>` MUST force selection. A forced encoder that is not invokable MUST abort with a clear error.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: NVENC chosen
 
 - GIVEN nvenc available and no override
 - WHEN the render runs
 - THEN the ffmpeg command uses `h264_nvenc`
 
+<!-- vox:covered CP-1 -->
 #### Scenario: CPU fallback
 
 - GIVEN no hardware encoder available
 - WHEN the render runs
 - THEN the ffmpeg command uses `libx264` and the render succeeds
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Forced encoder enforced
 
 - GIVEN `NOX_ENCODER=h264_nvenc` on a machine without a GPU
@@ -44,12 +48,14 @@ The chosen encoder MUST be the first available in preference order nvenc, qsv, v
 
 The hardware profile MUST parameterize the graph compiler. On the hardware path the graph MUST insert the vendor chain, for example hwupload plus format=nv12 before an nvenc encoder, or scale_vaapi for vaapi. On the CPU path the graph MUST be exactly the Spec B graph.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: HW nodes on hw path
 
 - GIVEN nvenc selected
 - WHEN the graph compiles
 - THEN the graph contains upload and download nodes with format=nv12 before the encoder
 
+<!-- vox:covered CP-1 -->
 #### Scenario: CPU graph unchanged
 
 - GIVEN `libx264` selected
@@ -60,6 +66,7 @@ The hardware profile MUST parameterize the graph compiler. On the hardware path 
 
 A `--check-gpu` flag MUST print a JSON capability report and exit 0 when the chosen encoder is invokable, verified by a dry-run encode to null output. It MUST exit non-zero when the chosen encoder cannot be invoked.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Dry run validates
 
 - GIVEN a machine with a working nvenc path

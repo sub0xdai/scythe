@@ -117,11 +117,13 @@ def _audio_chains(audio, duration, audio_offset, audio_input_index, inputs):
     return [f"{label}{trim},asetpts=PTS-STARTPTS[aout]"], "[aout]"
 
 
-def compile_graph(config, segments, audio=None, project_dir="."):
+def compile_graph(config, segments, audio=None, project_dir=".", profile=None):
     """Compile config + segments (+ audio) into one ffmpeg invocation.
 
     Asset paths in segments are resolved against project_dir. AudioSpec
     paths are used as given (main.py resolves them against project_dir).
+    A HardwareProfile with a non-empty hw_chain appends upload nodes
+    before the encoder; None or CPU_PROFILE emits the plain CPU graph.
     """
     assert isinstance(segments, list) and segments, "cutlist must be a non-empty array"
     width, height = config["resolution"]
@@ -196,6 +198,10 @@ def compile_graph(config, segments, audio=None, project_dir="."):
         text_seq += 1
         chains.append(f"{current}drawtext={':'.join(params)}{label}")
         current = label
+
+    if profile is not None and profile.hw_chain:
+        chains.append(f"{current}{profile.hw_chain}[vout]")
+        current = "[vout]"
 
     audio_chains, audio_map = _audio_chains(
         audio, duration, config.get("audio_offset", 0.0), len(inputs), inputs)
