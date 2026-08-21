@@ -35,8 +35,52 @@ from src.gpu import (
     probe,
     profile_for,
 )
+from src.telemetry import ProgressParser
 from src.themes import ThemeError, load_theme
 from src.validator import validate
+
+MACHINE = False  # JSON events are the only stdout content in machine mode
+
+
+def log(msg):
+    print(msg, file=sys.stderr if MACHINE else sys.stdout)
+
+
+def _json_event(event):
+    print(json.dumps(event))
+
+
+def _fail(message, code=1):
+    if MACHINE:
+        _json_event({"type": "error", "message": message})
+    else:
+        print(message)
+    sys.exit(code)
+
+
+def _progress_sink(event):
+    if MACHINE:
+        _json_event(event)
+    else:
+        print(f"Progress: {event['percent']}% frame={event['frame']} "
+              f"speed={event['speed']}x eta={event['eta_seconds']}s",
+              file=sys.stderr)
+
+
+def _run_render(cmd, duration, output_path):
+    """Run ffmpeg with -progress pipe:1, streaming telemetry events."""
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    parser = ProgressParser(duration, emit=_progress_sink)
+    for line in proc.stdout:
+        parser.feed_line(line)
+    stderr = proc.stderr.read()
+    proc.wait()
+    if proc.returncode != 0:
+        _fail(f"FFmpeg failed:\n{stderr[-4000:]}", code=proc.returncode)
+    if MACHINE:
+        _json_event({"type": "done"})
+    log(f"Done → {output_path}")
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────
@@ -92,7 +136,7 @@ def load_config(project_dir, cli_overrides=None):
         try:
             config.update(load_theme(theme_ref, base_dir=project_dir))
         except ThemeError as e:
-            print(f"ERROR: {e}")
+            log(f"ERROR: {e}")
             sys.exit(1)
 
     # Apply preset if specified
@@ -118,14 +162,14 @@ def _detect_audio(project_dir):
     """Resolve soundtrack/voiceover from audio/ per the naming convention."""
     audio_dir = os.path.join(project_dir, "audio")
     if not os.path.isdir(audio_dir):
-        print("  WARNING: no audio/ directory, output will be silent")
+        log("  WARNING: no audio/ directory, output will be silent")
         return None
 
     files = sorted(os.listdir(audio_dir))
     audio_files = [f for f in files if os.path.splitext(f)[1].lower() in AUDIO_EXTS]
 
     if not audio_files:
-        print(f"  WARNING: no audio files in {audio_dir}, output will be silent")
+        log(f"  WARNING: no audio files in {audio_dir}, output will be silent")
         return None
 
     vo_file = None
@@ -138,15 +182,15 @@ def _detect_audio(project_dir):
             soundtrack_files.append(f)
 
     if vo_file:
-        print(f"  Soundtrack: {soundtrack_files[0] if soundtrack_files else '(none)'}")
-        print(f"  Voiceover:  {vo_file}")
+        log(f"  Soundtrack: {soundtrack_files[0] if soundtrack_files else '(none)'}")
+        log(f"  Voiceover:  {vo_file}")
         return AudioSpec(
             soundtrack=os.path.join(audio_dir, soundtrack_files[0])
             if soundtrack_files else None,
             voiceover=os.path.join(audio_dir, vo_file),
         )
 
-    print(f"  Soundtrack: {soundtrack_files[0]}")
+    log(f"  Soundtrack: {soundtrack_files[0]}")
     return AudioSpec(soundtrack=os.path.join(audio_dir, soundtrack_files[0]))
 
 
@@ -172,7 +216,7 @@ def _select_profile():
     """Render-path profile resolution: abort on any error."""
     profile, error = _resolve_profile()
     if error:
-        print(f"ERROR: {error}")
+        log(f"ERROR: {error}")
         sys.exit(1)
     return profile
 
@@ -242,8 +286,8 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
     # Load cutlist
     cutlist_path = os.path.join(project_dir, "prompts", "cutlist.json")
     if not os.path.exists(cutlist_path):
-        print(f"ERROR: No cutlist found at {cutlist_path}")
-        print("Feed prompts/brutalist-video-prompt.md to an LLM to generate one.")
+        log(f"ERROR: No cutlist found at {cutlist_path}")
+        log("Feed prompts/brutalist-video-prompt.md to an LLM to generate one.")
         sys.exit(1)
 
     with open(cutlist_path) as f:
@@ -251,42 +295,42 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
 
     violations = validate(segments, project_dir, config)
     if violations:
-        print("Cutlist validation failed:")
+        log("Cutlist validation failed:")
         for v in violations:
             idx = f"segment {v.segment_index}: " if v.segment_index is not None else ""
-            print(f"  - [{v.rule}] {idx}{v.message}")
-        print(f"  ({len(violations)} violation(s))")
+            log(f"  - [{v.rule}] {idx}{v.message}")
+        log(f"  ({len(violations)} violation(s))")
         sys.exit(1)
 
     output_dir = os.path.join(project_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, "render.mp4")
 
-    print(f"Project:  {project_dir}")
-    print(f"Config:   {target_size[0]}×{target_size[1]} @ {config['fps']}fps | {config['font']} {config['font_size']}px")
-    print(f"Output:   {output_path}")
-    print(f"Segments: {len(segments)}")
-    print("─" * 50)
+    log(f"Project:  {project_dir}")
+    log(f"Config:   {target_size[0]}×{target_size[1]} @ {config['fps']}fps | {config['font']} {config['font_size']}px")
+    log(f"Output:   {output_path}")
+    log(f"Segments: {len(segments)}")
+    log("─" * 50)
 
-    print("Detecting audio...")
+    log("Detecting audio...")
     audio = _detect_audio(project_dir)
     if audio is None:
-        print("  → No audio, output will be silent")
+        log("  → No audio, output will be silent")
     if config["audio_offset"]:
-        print(f"  Offset:   {config['audio_offset']:.1f}s")
+        log(f"  Offset:   {config['audio_offset']:.1f}s")
 
     duration = segments[-1]["end"]
-    print("Compiling filtergraph...")
-    print("Probing hardware...")
+    log("Compiling filtergraph...")
+    log("Probing hardware...")
     profile = _select_profile()
-    print(f"  Encoder: {profile.encoder}")
+    log(f"  Encoder: {profile.encoder}")
     ass_path = None
     ass_content = build_ass(segments, config)
     if ass_content:
         ass_path = os.path.join(output_dir, "subtitles.ass")
         with open(ass_path, "w") as f:
             f.write(ass_content)
-        print(f"  Subtitles: {ass_path}")
+        log(f"  Subtitles: {ass_path}")
     graph = compile_graph(config, segments, audio, project_dir, profile, ass_path)
 
     cmd = ["ffmpeg", "-y", *profile.extra_args]
@@ -300,16 +344,12 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
             "-threads", "4", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
     if graph.audio_map:
         cmd += ["-c:a", "aac"]
+    cmd += ["-progress", "pipe:1"]
     cmd.append(output_path)
 
-    print(f"Rendering {output_path} ({duration:.1f}s)...")
-    print("Running: " + " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print("FFmpeg failed:")
-        print(result.stderr[-4000:])
-        sys.exit(result.returncode)
-    print(f"Done → {output_path}")
+    log(f"Rendering {output_path} ({duration:.1f}s)...")
+    log("Running: " + " ".join(cmd))
+    _run_render(cmd, duration, output_path)
 
 
 # ── Beat-Detect Mode (legacy) ─────────────────────────────────────────────
@@ -352,6 +392,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Kinetic Video Rendering Engine")
     parser.add_argument("--project", "-p", help="Path to project directory (cut-list mode)")
     parser.add_argument("--check-gpu", action="store_true", help="Print GPU capability report and exit")
+    parser.add_argument("--json", action="store_true", help="Machine mode: newline-delimited JSON events on stdout")
 
     # Style overrides
     parser.add_argument("--resolution", type=str, help="WxH e.g. 1920x1080 (overrides config)")
@@ -366,6 +407,8 @@ if __name__ == "__main__":
     parser.add_argument("--out", "-o", help="Output path (beat-detect mode)")
 
     args = parser.parse_args()
+
+    MACHINE = args.json or os.environ.get("NOX_JSON") == "1"
 
     if args.check_gpu:
         check_gpu()
