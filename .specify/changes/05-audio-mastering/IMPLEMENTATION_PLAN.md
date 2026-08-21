@@ -29,7 +29,7 @@ Container ffmpeg 7.1.4 has `sidechaincompress`, `loudnorm`, `afftdn`, `agate`, a
 - **Commit message**: `feat: sidechain ducking, loudnorm, and voice cleanup in the audio chain`
 - Completed 2026-06-01 by /skill:vox build.
 
-### CP-2: End-to-end audio verification
+### CP-2: End-to-end audio verification ✅
 
 - **Touches**: `tests/test_audio.py`
 - **Tasks**:
@@ -38,6 +38,7 @@ Container ffmpeg 7.1.4 has `sidechaincompress`, `loudnorm`, `afftdn`, `agate`, a
   3. `test_hum_reduced` (R3 S1): temp project with voiceover = 440Hz tone plus a stationary 60Hz hum at -45dBFS; soundtrack constant tone. Render, extract the voice-active window from output and from the source wav, compare 50-70Hz band energy via numpy FFT. Assert the output band energy is below the source band energy. If `afftdn=nf=-40` does not suppress the hum, tune `nf`/`nt` in this checkpoint (the chain data in gpu-style is a constant, not a pipeline change).
 - **Verification**: `podman run --rm --entrypoint python -v "$(pwd):/app:Z" kinetic-renderer -m unittest discover -s tests -v` prints `OK` including the three E2E tests; `tests/verify.sh` exits 0 (ALL GATES PASSED).
 - **Commit message**: `test: end-to-end audio mastering verification`
+- Completed 2026-06-01 by /skill:vox build.
 
 ## Risks & Open Questions
 

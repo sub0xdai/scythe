@@ -34,9 +34,16 @@ def _probe(show_entries):
 
 class ImportHygieneTests(unittest.TestCase):
     def test_no_heavy_imports_at_top_level(self):
-        import main  # noqa: F401
-        heavy = [m for m in ("moviepy", "PIL", "numpy") if m in sys.modules]
-        self.assertEqual(heavy, [])
+        # Fresh interpreter: suite-level imports from other test modules
+        # must not mask what main.py itself pulls in.
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import main, sys; "
+             "heavy = [m for m in ('moviepy', 'PIL', 'numpy') if m in sys.modules]; "
+             "assert heavy == [], heavy"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class RenderContractTests(unittest.TestCase):

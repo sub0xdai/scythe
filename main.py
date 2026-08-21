@@ -50,8 +50,8 @@ DEFAULTS = {
     "audio_offset": 0.0,
     "lufs_target": -14,
     "voice_cleanup": True,
-    "duck_threshold": 0.05,
-    "duck_ratio": 8,
+    "duck_threshold": 0.02,
+    "duck_ratio": 2,
 }
 
 # Presets for common formats

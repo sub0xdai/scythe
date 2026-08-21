@@ -115,8 +115,8 @@ def _audio_chains(audio, duration, config, audio_input_index, inputs):
                 .format(_fmt(config.get("lufs_target", -14))))
 
     if st_label and vo_label:
-        threshold = config.get("duck_threshold", 0.05)
-        ratio = config.get("duck_ratio", 8)
+        threshold = config.get("duck_threshold", 0.02)
+        ratio = config.get("duck_ratio", 2)
         chains = [f"{st_label}{trim},asetpts=PTS-STARTPTS[st_t]"]
         if config.get("voice_cleanup", True):
             vo_clean = ("afftdn=nf=-40:nt=w,agate=threshold=0.02:attack=20:release=250,"

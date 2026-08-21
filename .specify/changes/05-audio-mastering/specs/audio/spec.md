@@ -16,6 +16,7 @@ When a voiceover exists, the soundtrack MUST pass through `sidechaincompress` ke
 
 The final mix MUST pass through `loudnorm` targeting -14 LUFS by default, configurable per project or theme. The integrated loudness of the rendered output MUST be within plus or minus 1 LUFS of the target.
 
+<!-- vox:covered CP-2 -->
 #### Scenario: Output meets LUFS target
 
 - GIVEN the fixture audio mix
@@ -26,12 +27,14 @@ The final mix MUST pass through `loudnorm` targeting -14 LUFS by default, config
 
 Voiceover MUST pass through `afftdn` for noise suppression and `agate` for silence gating when enabled. Enablement MUST be configurable, defaulting to on.
 
+<!-- vox:covered CP-2 -->
 #### Scenario: Hum reduced
 
 - GIVEN a voiceover with a synthetic hum at a known frequency
 - WHEN the render runs
 - THEN the output voiceover shows reduced energy at the hum frequency compared to the input
 
+<!-- vox:covered CP-2 -->
 #### Scenario: Cleanup can be disabled
 
 - GIVEN config with voice cleanup disabled
