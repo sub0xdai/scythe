@@ -37,7 +37,7 @@ The .ass coordinate space is set by PlayResX/PlayResY (canvas size), which makes
 - **Commit message**: `feat: .ass subtitle pipeline with wrapping, safe zones, and karaoke`
 - Completed 2026-06-01 by /skill:vox build.
 
-### CP-2: End-to-end text render verification
+### CP-2: End-to-end text render verification ✅
 
 - **Touches**: `tests/test_render.py`, `tests/verify.sh` (no change expected)
 - **Tasks**:
@@ -45,6 +45,7 @@ The .ass coordinate space is set by PlayResX/PlayResY (canvas size), which makes
   2. Assert the burned output differs from a no-text render (text actually rendered - compare file size or frame bytes at a text timestamp).
 - **Verification**: `podman run --rm --entrypoint python -v "$(pwd):/app:Z" kinetic-renderer -m unittest discover -s tests -v` prints `OK`; `tests/verify.sh` exits 0 (ALL GATES PASSED, fixture render now burns subtitles).
 - **Commit message**: `test: end-to-end .ass text burn verification`
+- Completed 2026-06-01 by /skill:vox build.
 
 ## Risks & Open Questions
 

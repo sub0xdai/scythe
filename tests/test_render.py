@@ -12,6 +12,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+from PIL import Image
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = "tests/fixtures/synthetic_project"
 OUTPUT = REPO_ROOT / FIXTURE / "output" / "render.mp4"
@@ -86,6 +89,85 @@ class DeterminismTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr[-2000:])
                 shutil.copy2(OUTPUT, out)
             self.assertEqual(first.read_bytes(), second.read_bytes())
+
+
+class TextBurnE2ETests(unittest.TestCase):
+    """Text must render through the .ass burn, not drawtext/TextClip (R1 S2)."""
+
+    SEGMENTS = [
+        {"start": 0.0, "end": 1.0, "phase": "hook",
+         "text": "THE PROBLEM", "asset": None,
+         "filter": "white_flash", "effect": None},
+        {"start": 1.0, "end": 3.0, "phase": "kinetic_cut",
+         "text": "THE FIX IS HERE", "asset": None,
+         "filter": "grayscale", "effect": "word_flash"},
+        {"start": 3.0, "end": 4.0, "phase": "kinetic_cut",
+         "text": None, "asset": None, "filter": "white_flash",
+         "effect": None,
+         "lower_third": {"title": "DR. NOX",
+                         "subtitle": "SYSTEMS ENGINEER"}},
+    ]
+
+    def _render_project(self, tmp):
+        prompts = Path(tmp, "prompts")
+        prompts.mkdir(parents=True)
+        (prompts / "cutlist.json").write_text(json.dumps(self.SEGMENTS))
+        (Path(tmp) / "config.json").write_text(json.dumps({
+            "resolution": [360, 640], "fps": 15,
+            "font": "LiberationSerif-Bold", "font_size": 28,
+        }))
+        result = subprocess.run(
+            [sys.executable, "main.py", "--project", tmp],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        return Path(tmp, "output")
+
+    @staticmethod
+    def _dark_pixel_count(media, t):
+        frame = subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(t), "-i", str(media),
+             "-frames:v", "1", "-f", "image2pipe", "-c:v", "png", "-"],
+            capture_output=True, check=True,
+        )
+        img = np.array(Image.open(__import__("io").BytesIO(frame.stdout)))
+        gray = np.dot(img[..., :3], [0.2989, 0.5870, 0.1140])
+        return int((gray < 128).sum())
+
+    def test_ass_generated_and_text_burned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self._render_project(tmp)
+            ass = out / "subtitles.ass"
+            self.assertTrue(ass.exists())
+            content = ass.read_text()
+            for style in ("Default", "Karaoke", "LowerThird"):
+                self.assertIn(style, content)
+            self.assertIn("\\k", content)
+            self.assertIn("\\fad(150,150)", content)
+            render = out / "render.mp4"
+            dark = self._dark_pixel_count(render, 0.5)
+            self.assertGreater(dark, 0, "no dark pixels at a text timestamp")
+
+    def test_textless_render_stays_white(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            segments = [{"start": 0.0, "end": 2.0, "phase": "hook",
+                         "text": None, "asset": None,
+                         "filter": "white_flash", "effect": None}]
+            prompts = Path(tmp, "prompts")
+            prompts.mkdir(parents=True)
+            (prompts / "cutlist.json").write_text(json.dumps(segments))
+            (Path(tmp) / "config.json").write_text(json.dumps({
+                "resolution": [360, 640], "fps": 15,
+                "font": "LiberationSerif-Bold", "font_size": 28,
+            }))
+            result = subprocess.run(
+                [sys.executable, "main.py", "--project", tmp],
+                cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+            render = Path(tmp, "output", "render.mp4")
+            dark = self._dark_pixel_count(render, 0.5)
+            self.assertEqual(dark, 0, "textless white render has dark pixels")
 
 
 if __name__ == "__main__":

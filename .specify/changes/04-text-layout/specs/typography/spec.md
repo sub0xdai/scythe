@@ -23,6 +23,7 @@ Text overlays MUST be generated as a styled .ass file and burned through the sub
 
 Text MUST wrap to a configured bounding box defined by canvas-relative width and margins. Multi-line text MUST be vertically centered within its box. Wrapping MUST break on word boundaries.
 
+<!-- vox:covered CP-2 -->
 #### Scenario: Long text wraps
 
 - GIVEN 60 characters of text in a box at 80 percent canvas width with 72px font
