@@ -16,14 +16,12 @@ The engine MUST invoke ffmpeg with `-progress pipe:1` and parse `out_time`, `fra
 
 With `--json` or `NOX_JSON=1`, stdout MUST emit newline-delimited JSON events of the form `{type, percent, frame, out_time, speed, eta_seconds}` with type in progress, done, error. In machine mode, JSON events MUST be the only stdout content. Human progress stays on stderr.
 
-<!-- vox:covered CP-1 -->
 #### Scenario: Parseable stream
 
 - GIVEN a render with `--json`
 - WHEN the render runs
 - THEN every stdout line parses as JSON and the final event has type done
 
-<!-- vox:covered CP-1 -->
 #### Scenario: Error event
 
 - GIVEN a render that fails mid-flight
@@ -34,10 +32,8 @@ With `--json` or `NOX_JSON=1`, stdout MUST emit newline-delimited JSON events of
 
 ETA MUST be computed from the cutlist span, elapsed time, and speed: `eta = (cutlist_duration - out_time) / speed`. The cutlist span is the sum of segment durations.
 
-<!-- vox:covered CP-1 -->
 #### Scenario: ETA present
 
 - GIVEN a fixture with a known cutlist duration
 - WHEN progress events are observed
 - THEN every progress event carries a finite eta_seconds value
-<!-- vox:covered CP-1 -->
