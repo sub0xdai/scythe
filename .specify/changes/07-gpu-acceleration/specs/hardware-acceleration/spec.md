@@ -73,6 +73,7 @@ A `--check-gpu` flag MUST print a JSON capability report and exit 0 when the cho
 - WHEN `--check-gpu` runs
 - THEN it exits 0 and the JSON includes a successful dry-run result
 
+<!-- vox:covered CP-2 -->
 #### Scenario: Broken passthrough detected
 
 - GIVEN a container without GPU device access but with the encoder compiled
@@ -83,6 +84,7 @@ A `--check-gpu` flag MUST print a JSON capability report and exit 0 when the cho
 
 render.sh MUST support a GPU passthrough flag mapping to the podman runtime flags: `--gpu nvidia` adds `--gpus all`, `--gpu vaapi` and `--gpu qsv` add the `/dev/dri` device. The README MUST document the three setups.
 
+<!-- vox:covered CP-2 -->
 #### Scenario: NVIDIA flag wired
 
 - GIVEN `./render.sh projects/x --gpu nvidia`

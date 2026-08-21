@@ -32,7 +32,7 @@ The design decision that makes probe selection self-healing: selection is not "f
 - **Commit message**: `feat: auto-detect GPU encoders with dry-run validation`
 - Completed 2026-06-01 by /skill:vox build.
 
-### CP-2: --check-gpu CLI
+### CP-2: --check-gpu CLI ✅
 
 - **Touches**: `main.py`, `tests/test_gpu.py`
 - **Tasks**:
@@ -40,6 +40,7 @@ The design decision that makes probe selection self-healing: selection is not "f
   2. Tests: `--check-gpu` on the CPU container exits 0 and JSON `chosen.encoder == "libx264"`; `NOX_ENCODER=h264_nvenc --check-gpu` on this host (compiled but no GPU) exits non-zero and JSON reports dry_run_ok false.
 - **Verification**: `podman run --rm --entrypoint python -v "$(pwd):/app:Z" kinetic-renderer main.py --check-gpu` prints parseable JSON with libx264 chosen and exits 0; `NOX_ENCODER=h264_nvenc podman run ... main.py --check-gpu` exits non-zero.
 - **Commit message**: `feat: add --check-gpu capability report`
+- Completed 2026-06-01 by /skill:vox build.
 
 ### CP-3: Container runner passthrough and docs
 

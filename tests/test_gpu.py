@@ -147,5 +147,33 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn("not invokable", result.stdout)
 
 
+class CheckGpuCliTests(unittest.TestCase):
+    def _check_gpu(self, env_extra=None):
+        env = dict(os.environ)
+        if env_extra:
+            env.update(env_extra)
+        return subprocess.run(
+            [sys.executable, "main.py", "--check-gpu"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True,
+            env=env, timeout=120,
+        )
+
+    def test_check_gpu_reports_cpu_and_exits_zero(self):
+        result = self._check_gpu()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["chosen"]["encoder"], "libx264")
+        self.assertTrue(report["chosen"]["dry_run_ok"])
+        self.assertIn("libx264", report["encoders"])
+
+    def test_check_gpu_reports_broken_passthrough(self):
+        result = self._check_gpu({"NOX_ENCODER": "h264_nvenc"})
+        self.assertNotEqual(result.returncode, 0)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["chosen"]["encoder"], "h264_nvenc")
+        self.assertFalse(report["chosen"]["dry_run_ok"])
+        self.assertIn("not invokable", report["chosen"]["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

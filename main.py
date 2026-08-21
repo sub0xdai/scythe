@@ -27,7 +27,13 @@ import subprocess
 import sys
 
 from src.compiler import AudioSpec, compile_graph
-from src.gpu import CPU_PROFILE, dry_run, probe, profile_for
+from src.gpu import (
+    CPU_PROFILE,
+    dry_run,
+    parse_encoders,
+    probe,
+    profile_for,
+)
 from src.validator import validate
 
 
@@ -119,25 +125,71 @@ def _detect_audio(project_dir):
     return AudioSpec(soundtrack=os.path.join(audio_dir, soundtrack_files[0]))
 
 
-def _select_profile():
-    """Resolve the hardware profile honoring NOX_GPU and NOX_ENCODER."""
+def _resolve_profile():
+    """Return (profile, error). Honors NOX_GPU and NOX_ENCODER."""
     gpu_off = os.environ.get("NOX_GPU", "").lower() == "off"
     forced = os.environ.get("NOX_ENCODER")
     if gpu_off and forced:
-        print("ERROR: NOX_GPU=off and NOX_ENCODER are mutually exclusive")
-        sys.exit(1)
+        return CPU_PROFILE, "NOX_GPU=off and NOX_ENCODER are mutually exclusive"
     if gpu_off:
-        return CPU_PROFILE
+        return CPU_PROFILE, None
     if forced:
         profile = profile_for(forced)
         if profile is None:
-            print(f"ERROR: unknown encoder '{forced}' (NOX_ENCODER)")
-            sys.exit(1)
+            return CPU_PROFILE, f"unknown encoder '{forced}' (NOX_ENCODER)"
         if not dry_run(forced, profile.extra_args):
-            print(f"ERROR: encoder '{forced}' is not invokable on this machine")
-            sys.exit(1)
-        return profile
-    return probe()
+            return profile, f"encoder '{forced}' is not invokable on this machine"
+        return profile, None
+    return probe(), None
+
+
+def _select_profile():
+    """Render-path profile resolution: abort on any error."""
+    profile, error = _resolve_profile()
+    if error:
+        print(f"ERROR: {error}")
+        sys.exit(1)
+    return profile
+
+
+def _ffmpeg_names(flag):
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", flag],
+        capture_output=True, text=True, timeout=30,
+    )
+    return parse_encoders(result.stdout)
+
+
+def check_gpu():
+    """Print the GPU capability report and exit by invokability."""
+    encoders = sorted(
+        n for n in _ffmpeg_names("-encoders")
+        if any(k in n for k in ("nvenc", "qsv", "vaapi", "videotoolbox", "v4l2"))
+        or n == "libx264")
+    decoders = sorted(
+        n for n in _ffmpeg_names("-decoders")
+        if any(k in n for k in ("cuvid", "qsv", "vaapi", "videotoolbox", "v4l2m2m")))
+    hwaccels_result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-hwaccels"],
+        capture_output=True, text=True, timeout=30,
+    )
+    hwaccels = [line.strip() for line in hwaccels_result.stdout.splitlines()
+                if line.strip() and not line.startswith("Hardware")]
+
+    profile, error = _resolve_profile()
+    dry_run_ok = dry_run(profile.encoder, profile.extra_args) if error is None else False
+    report = {
+        "encoders": encoders,
+        "decoders": decoders,
+        "hwaccels": hwaccels,
+        "chosen": {
+            "encoder": profile.encoder,
+            "dry_run_ok": dry_run_ok,
+            "error": error,
+        },
+    }
+    print(json.dumps(report, indent=2))
+    sys.exit(0 if dry_run_ok else 1)
 
 
 # ── Cut-List Mode ─────────────────────────────────────────────────────────
@@ -267,6 +319,7 @@ def generate_kinetic_sequence(audio_path, asset_dir, output_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Kinetic Video Rendering Engine")
     parser.add_argument("--project", "-p", help="Path to project directory (cut-list mode)")
+    parser.add_argument("--check-gpu", action="store_true", help="Print GPU capability report and exit")
 
     # Style overrides
     parser.add_argument("--resolution", type=str, help="WxH e.g. 1920x1080 (overrides config)")
@@ -282,7 +335,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if args.project:
+    if args.check_gpu:
+        check_gpu()
+    elif args.project:
         resolution = None
         if args.resolution:
             parts = args.resolution.split("x")
