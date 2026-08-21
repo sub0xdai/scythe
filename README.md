@@ -9,7 +9,7 @@ _headless video factory_
 ## Quick Start
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/setup.sh | bash -s my-video
+curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/scythe.sh | bash -s my-video
 ```
 
 One command: installs host deps, clones the engine if missing, scaffolds the project, ingests assets, writes a valid default cutlist, and renders.
@@ -17,7 +17,7 @@ One command: installs host deps, clones the engine if missing, scaffolds the pro
 Skip fetches and drop assets in yourself:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/setup.sh | bash -s my-video --no-audio --no-video --no-images
+curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/scythe.sh | bash -s my-video --no-audio --no-video --no-images
 cp ~/clips/*.mp4 projects/my-video/raw_footage/
 ./render.sh projects/my-video
 ```

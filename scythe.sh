@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # scythe one-command setup: deps, scaffold, ingest, default cutlist, render.
 #
-#   curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/setup.sh | bash -s my-video
-#   curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/setup.sh | bash -s my-video --no-video --no-images
+#   curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/scythe.sh | bash -s my-video
+#   curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/scythe.sh | bash -s my-video --no-video --no-images
 #
 # Env overrides: SCYTHE_DIR (engine location, default ~/1-projects/scythe)
 
