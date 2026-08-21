@@ -1,6 +1,6 @@
-# System Optimization Plan: n0x-content
+# System Optimization Plan: scythe
 
-This document outlines structural, technical, and architectural upgrades to transform the `n0x-content` headless engine from a niche stylistic script into an extensible, high-performance video production pipeline.
+This document outlines structural, technical, and architectural upgrades to transform the `scythe` headless engine from a niche stylistic script into an extensible, high-performance video production pipeline.
 
 ---
 
@@ -92,7 +92,7 @@ Target Architecture:
 
 ### Layman's Explanation
 
-To make `n0x-content` professional, it needs to move from a specialized "glitch video generator" to a flexible, fast video factory.
+To make `scythe` professional, it needs to move from a specialized "glitch video generator" to a flexible, fast video factory.
 
 This means:
 

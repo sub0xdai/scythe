@@ -1,7 +1,7 @@
 """Unit and end-to-end tests for the pre-render validation gate (Spec A, CP-1).
 
 Run inside the container where jsonschema, ffmpeg, and moviepy exist:
-  podman run --rm --entrypoint python -v "$(pwd):/app:Z" kinetic-renderer -m unittest discover -s tests -v
+  podman run --rm --entrypoint python -v "$(pwd):/app:Z" scythe -m unittest discover -s tests -v
 """
 
 import json

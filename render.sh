@@ -62,16 +62,16 @@ case "$GPU" in
 esac
 
 if [ "${NOX_DRY_RUN:-}" = "1" ]; then
-    echo "podman run --rm ${GPU_ARGS[*]:-} -v \"$(pwd):/app:Z\" kinetic-renderer --project \"$PROJECT\" ${EXTRA_ARGS[*]:-}"
+    echo "podman run --rm ${GPU_ARGS[*]:-} -v \"$(pwd):/app:Z\" scythe --project \"$PROJECT\" ${EXTRA_ARGS[*]:-}"
     exit 0
 fi
 
 echo "=== Building container (cached) ==="
-podman build -t kinetic-renderer .
+podman build -t scythe .
 
 echo ""
 echo "=== Rendering: $PROJECT ==="
-podman run --rm "${GPU_ARGS[@]}" -v "$(pwd):/app:Z" kinetic-renderer --project "$PROJECT" "${EXTRA_ARGS[@]}"
+podman run --rm "${GPU_ARGS[@]}" -v "$(pwd):/app:Z" scythe --project "$PROJECT" "${EXTRA_ARGS[@]}"
 
 echo ""
 echo "Done → $(pwd)/$PROJECT/output/render.mp4"

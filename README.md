@@ -1,4 +1,4 @@
-# n0x-content — Kinetic Video Pipeline
+# scythe — Kinetic Video Pipeline
 
 > Headless video compositing engine. Drop videos + images + audio → get brutalist, beat-synced MP4.
 

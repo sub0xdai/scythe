@@ -1,4 +1,4 @@
-# n0x-content - Spec Pack Index and Build Order
+# scythe - Spec Pack Index and Build Order
 
 Merged spec pack for improve.md. Seven specs (A-G) across four phases, executed in strict topological order.
 
@@ -83,7 +83,7 @@ src/
 
 ## Layman's Explanation
 
-To upgrade n0x-content, we cannot simply patch all missing features at once.
+To upgrade scythe, we cannot simply patch all missing features at once.
 
 First, we install a guardrail (Spec A) so the tool immediately stops and tells you if your script or video clips are missing or broken.
 

@@ -1,4 +1,4 @@
-# n0x-content - Constitution
+# scythe - Constitution
 
 ## Tech Stack
 

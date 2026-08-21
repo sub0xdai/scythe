@@ -1,5 +1,5 @@
 {
-  "$description": "Compatibility matrix for n0x-content filter × effect combinations. Generated from main.py apply_filter() and apply_effect() implementations. 'valid' = filter and effect compose correctly. 'nonsensical' = produces invisible/no-op output (e.g. white_flash replaces asset, motion effects operate on blank frame). 'noop' = the effect is an identity transform but does not break anything.",
+  "$description": "Compatibility matrix for scythe filter × effect combinations. Generated from main.py apply_filter() and apply_effect() implementations. 'valid' = filter and effect compose correctly. 'nonsensical' = produces invisible/no-op output (e.g. white_flash replaces asset, motion effects operate on blank frame). 'noop' = the effect is an identity transform but does not break anything.",
 
   "filters": {
     "grayscale":         { "impl": "vfx.BlackAndWhite()", "assetPreserving": true },

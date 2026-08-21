@@ -1,5 +1,5 @@
 """
-Kinetic Video Rendering Engine — project-aware entry point.
+Scythe - kinetic video rendering engine - project-aware entry point.
 
 Drop videos + images + audio into a project, define a cut-list, get an MP4.
 
@@ -389,7 +389,7 @@ def generate_kinetic_sequence(audio_path, asset_dir, output_path):
 # ── CLI ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Kinetic Video Rendering Engine")
+    parser = argparse.ArgumentParser(description="Scythe - kinetic video rendering engine")
     parser.add_argument("--project", "-p", help="Path to project directory (cut-list mode)")
     parser.add_argument("--check-gpu", action="store_true", help="Print GPU capability report and exit")
     parser.add_argument("--json", action="store_true", help="Machine mode: newline-delimited JSON events on stdout")
