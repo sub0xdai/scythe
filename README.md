@@ -1,5 +1,7 @@
 # scythe - headless video factory
 
+![scythe](scythe.jpg)
+
 > Drop assets + a cutlist into a project, get a broadcast-ready MP4. One ffmpeg pass, zero frame loops.
 
 ## Quick Start
