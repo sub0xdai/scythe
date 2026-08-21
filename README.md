@@ -12,13 +12,13 @@ _headless video factory_
 curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/scythe.sh | bash -s my-video
 ```
 
-One command: installs host deps, clones the engine if missing, scaffolds the project, ingests assets, writes a valid default cutlist, and renders.
-
-Skip fetches and drop assets in yourself:
+Installs host deps, clones the engine if missing, and scaffolds `projects/my-video/`. No assets are installed - this is your video, so provide your own:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/scythe.sh | bash -s my-video --no-audio --no-video --no-images
 cp ~/clips/*.mp4 projects/my-video/raw_footage/
+cp ~/Downloads/soundtrack.mp3 projects/my-video/audio/
+cp ~/Downloads/voiceover.wav projects/my-video/audio/   # optional
+python3 scripts/generate_cutlist.py projects/my-video   # valid default cutlist from your assets
 ./render.sh projects/my-video
 ```
 
