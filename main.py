@@ -6,8 +6,7 @@ Drop videos + images + audio into a project, define a cut-list, get an MP4.
 Two modes:
   1. Cut-list mode:  python main.py --project projects/my-video
      Reads config.json (style) + prompts/cutlist.json (timeline).
-     Applies filters, effects, text overlays.
-     Mixes soundtrack + voiceover from audio/.
+     Compiles one ffmpeg filtergraph and renders in a single pass.
   2. Beat-detect mode:  python main.py --audio audio/track.wav --assets video_assets/ --out output.mp4
      Legacy librosa beat-sync, no voiceover.
 
@@ -24,24 +23,10 @@ Project directory structure:
 import argparse
 import json
 import os
+import subprocess
 import sys
 
-import numpy as np
-from PIL import Image
-from moviepy import (
-    VideoFileClip,
-    AudioFileClip,
-    ImageClip,
-    CompositeVideoClip,
-    CompositeAudioClip,
-    concatenate_videoclips,
-    TextClip,
-    ColorClip,
-    vfx,
-    afx,
-)
-
-
+from src.compiler import AudioSpec, compile_graph
 from src.validator import validate
 
 
@@ -92,128 +77,13 @@ def load_config(project_dir, cli_overrides=None):
     return config
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────
+# ── Audio ─────────────────────────────────────────────────────────────────
 
-VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".avi"}
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".m4a"}
 
 
-def _load_asset(path, duration, target_size):
-    """Load a clip from path. Handles video, image, and missing files.
-    Videos are center-cropped to target_size (not stretched).
-    """
-    if not os.path.exists(path):
-        print(f"    WARNING: asset not found: {path}, using black frame")
-        return ColorClip(size=target_size, color=(0, 0, 0), duration=duration)
-
-    ext = os.path.splitext(path)[1].lower()
-
-    if ext in IMAGE_EXTS:
-        pil_img = Image.open(path).convert("RGB")
-        # Center-crop to target ratio
-        img_w, img_h = pil_img.size
-        target_w, target_h = target_size
-        target_ratio = target_w / target_h
-        img_ratio = img_w / img_h
-        if img_ratio > target_ratio:
-            new_w = int(img_h * target_ratio)
-            left = (img_w - new_w) // 2
-            pil_img = pil_img.crop((left, 0, left + new_w, img_h))
-        else:
-            new_h = int(img_w / target_ratio)
-            top = (img_h - new_h) // 2
-            pil_img = pil_img.crop((0, top, img_w, top + new_h))
-        pil_img = pil_img.resize(target_size, Image.LANCZOS)
-        img = np.array(pil_img)
-        return ImageClip(img, duration=duration)
-
-    if ext in VIDEO_EXTS:
-        clip = VideoFileClip(path)
-        # Center-crop to target ratio
-        clip = clip.resized(height=target_size[1])
-        if clip.w > target_size[0]:
-            clip = clip.cropped(x_center=clip.w / 2, width=target_size[0])
-        else:
-            clip = clip.resized(width=target_size[0])
-        return clip.subclipped(0, min(duration, clip.duration))
-
-    print(f"    WARNING: unknown format '{ext}' for {path}, using black frame")
-    return ColorClip(size=target_size, color=(0, 0, 0), duration=duration)
-
-
-# ── Filter/Effect Registry ────────────────────────────────────────────────
-
-def apply_filter(clip, filter_name):
-    """Apply a named visual filter to a clip. Returns modified clip."""
-    if filter_name == "grayscale":
-        return clip.with_effects([vfx.BlackAndWhite()])
-    elif filter_name == "color_invert":
-        return clip.with_effects([vfx.InvertColors()])
-    elif filter_name == "high_contrast_green":
-        return clip.image_transform(lambda frame: _contrast_crush(frame, accent=(0, 255, 0)))
-    elif filter_name == "high_contrast_red":
-        return clip.image_transform(lambda frame: _contrast_crush(frame, accent=(255, 0, 0)))
-    elif filter_name == "white_flash":
-        return ColorClip(size=clip.size, color=(255, 255, 255), duration=clip.duration)
-    elif filter_name == "chromatic_aberration":
-        return clip.image_transform(_chromatic_aberration)
-    elif filter_name == "film_grain":
-        return clip.image_transform(_film_grain)
-    elif filter_name == "color_crush":
-        return clip.image_transform(lambda frame: _contrast_crush(frame))
-    return clip
-
-
-def _contrast_crush(frame, accent=None):
-    """Destroy midtones: push darks to black, brights to white."""
-    gray = np.dot(frame[..., :3], [0.2989, 0.5870, 0.1140])
-    mask = gray > 128
-    crushed = np.zeros_like(frame)
-    if accent:
-        crushed[mask] = accent
-    else:
-        crushed[mask] = [255, 255, 255]
-    return crushed
-
-
-def _chromatic_aberration(frame):
-    """Offset R and B channels horizontally for aberration effect."""
-    shifted = frame.copy()
-    shifted[:, :-2, 0] = frame[:, 2:, 0]
-    shifted[:, 2:, 2] = frame[:, :-2, 2]
-    return shifted
-
-
-def _film_grain(frame):
-    """Overlay 4% monochrome noise."""
-    noise = np.random.randint(0, 11, frame.shape, dtype="uint8")
-    return np.clip(frame.astype("int16") + noise - 5, 0, 255).astype("uint8")
-
-
-def apply_effect(clip, effect_name):
-    """Apply a named motion effect. Returns modified clip."""
-    if effect_name in ("ken_burns_slow", "ken_burns_fast"):
-        zoom_ratio = 1.08 if "slow" in effect_name else 1.15
-        return clip.resized(lambda t: 1 + (zoom_ratio - 1) * t / clip.duration)
-    elif effect_name == "snap_zoom":
-        mid = clip.duration / 2
-        def snap_resize(t):
-            return 1.0 if t < mid else 1.3
-        return clip.resized(snap_resize)
-    elif effect_name in ("strobe", "word_flash"):
-        return clip
-    return clip
-
-
-# ── Audio Mixing ──────────────────────────────────────────────────────────
-
-def _mix_audio(project_dir, video_duration, audio_offset=0.0):
-    """
-    Load soundtrack + voiceover from audio/, mix them.
-    Soundtrack is ducked to 30% under voiceover.
-    audio_offset: start N seconds into the audio track.
-    """
+def _detect_audio(project_dir):
+    """Resolve soundtrack/voiceover from audio/ per the naming convention."""
     audio_dir = os.path.join(project_dir, "audio")
     if not os.path.isdir(audio_dir):
         print("  WARNING: no audio/ directory, output will be silent")
@@ -235,27 +105,17 @@ def _mix_audio(project_dir, video_duration, audio_offset=0.0):
         else:
             soundtrack_files.append(f)
 
-    if audio_offset > 0:
-        print(f"  Offset:   {audio_offset:.1f}s")
+    if vo_file:
+        print(f"  Soundtrack: {soundtrack_files[0] if soundtrack_files else '(none)'}")
+        print(f"  Voiceover:  {vo_file}")
+        return AudioSpec(
+            soundtrack=os.path.join(audio_dir, soundtrack_files[0])
+            if soundtrack_files else None,
+            voiceover=os.path.join(audio_dir, vo_file),
+        )
 
-    if not vo_file and len(audio_files) == 1:
-        return AudioFileClip(os.path.join(audio_dir, audio_files[0])).subclipped(audio_offset, audio_offset + video_duration)
-
-    if not vo_file:
-        print(f"  Soundtrack: {soundtrack_files[0]}")
-        return AudioFileClip(os.path.join(audio_dir, soundtrack_files[0])).subclipped(audio_offset, audio_offset + video_duration)
-
-    print(f"  Soundtrack: {soundtrack_files[0] if soundtrack_files else '(none)'}")
-    print(f"  Voiceover:  {vo_file}")
-
-    vo = AudioFileClip(os.path.join(audio_dir, vo_file)).subclipped(audio_offset, audio_offset + video_duration)
-
-    if soundtrack_files:
-        st = AudioFileClip(os.path.join(audio_dir, soundtrack_files[0])).subclipped(audio_offset, audio_offset + video_duration)
-        st = st.with_effects([afx.MultiplyVolume(0.3)])
-        return CompositeAudioClip([st, vo])
-    else:
-        return vo
+    print(f"  Soundtrack: {soundtrack_files[0]}")
+    return AudioSpec(soundtrack=os.path.join(audio_dir, soundtrack_files[0]))
 
 
 # ── Cut-List Mode ─────────────────────────────────────────────────────────
@@ -263,7 +123,8 @@ def _mix_audio(project_dir, video_duration, audio_offset=0.0):
 def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=None,
                           font=None, font_size=None, stroke_width=None,
                           stroke_color=None, text_color=None):
-    """Read cutlist.json and config.json, render the full video."""
+    """Read cutlist.json and config.json, render the full video in one ffmpeg pass."""
+    project_dir = os.path.abspath(project_dir)
 
     # Load config
     config = load_config(project_dir, {
@@ -278,7 +139,6 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
     })
 
     target_size = tuple(config["resolution"])
-    audio_offset_val = config["audio_offset"]
 
     # Load cutlist
     cutlist_path = os.path.join(project_dir, "prompts", "cutlist.json")
@@ -309,84 +169,46 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
     print(f"Segments: {len(segments)}")
     print("─" * 50)
 
-    clips = []
-    for i, seg in enumerate(segments):
-        start = seg["start"]
-        end = seg["end"]
-        duration = end - start
-        phase = seg["phase"]
-        asset_path = seg.get("asset")
-        filter_name = seg.get("filter")
-        effect_name = seg.get("effect")
-
-        print(f"  [{start:6.2f}s → {end:6.2f}s] {phase:16s} | {filter_name or '-':20s} | {effect_name or '-'}")
-
-        if asset_path:
-            full_asset = os.path.join(project_dir, asset_path)
-            clip = _load_asset(full_asset, duration, target_size)
-            # Sub-clip from specific timestamp if specified
-            clip_start = seg.get("clip_start", 0)
-            if clip_start > 0 and hasattr(clip, 'subclipped'):
-                clip_end_val = seg.get("clip_end", clip_start + duration)
-                clip = clip.subclipped(clip_start, min(clip_end_val, clip.duration))
-        else:
-            clip = ColorClip(size=target_size, color=(0, 0, 0), duration=duration)
-
-        if filter_name:
-            clip = apply_filter(clip, filter_name)
-
-        if effect_name:
-            clip = apply_effect(clip, effect_name)
-
-        # Force consistent dimensions after all transforms
-        clip = clip.resized(target_size)
-
-        # Text overlay
-        text = seg.get("text")
-        if text:
-            # Pad with newlines to prevent Pillow bounding-box stroke clipping
-            txt = TextClip(
-                text=f"\n{text}\n",
-                font_size=config["font_size"],
-                font=config["font"],
-                color=config["text_color"],
-                stroke_color=config["stroke_color"],
-                stroke_width=config["stroke_width"],
-                method="label",
-            ).with_position("center").with_duration(duration)
-            clip = CompositeVideoClip([clip, txt])
-
-        clips.append(clip)
-
-    print("─" * 50)
-    print("Assembling timeline...")
-    final = concatenate_videoclips(clips)
-
-    print("Mixing audio...")
-    audio = _mix_audio(project_dir, final.duration, audio_offset_val)
-    if audio:
-        final = final.with_audio(audio)
-    else:
+    print("Detecting audio...")
+    audio = _detect_audio(project_dir)
+    if audio is None:
         print("  → No audio, output will be silent")
+    if config["audio_offset"]:
+        print(f"  Offset:   {config['audio_offset']:.1f}s")
 
-    print(f"Rendering {output_path} ({final.duration:.1f}s)...")
-    final.write_videofile(
-        output_path,
-        fps=config["fps"],
-        codec="libx264",
-        audio_codec="aac",
-        preset="medium",
-        threads=4,
-        ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
-    )
+    duration = segments[-1]["end"]
+    print("Compiling filtergraph...")
+    graph = compile_graph(config, segments, audio, project_dir)
+
+    cmd = ["ffmpeg", "-y"]
+    for arg_list in graph.input_args:
+        cmd.extend(arg_list)
+    cmd += ["-filter_complex", graph.filter_complex,
+            "-map", graph.video_map]
+    if graph.audio_map:
+        cmd += ["-map", graph.audio_map]
+    cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "23",
+            "-threads", "4", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    if graph.audio_map:
+        cmd += ["-c:a", "aac"]
+    cmd.append(output_path)
+
+    print(f"Rendering {output_path} ({duration:.1f}s)...")
+    print("Running: " + " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print("FFmpeg failed:")
+        print(result.stderr[-4000:])
+        sys.exit(result.returncode)
     print(f"Done → {output_path}")
 
 
 # ── Beat-Detect Mode (legacy) ─────────────────────────────────────────────
 
 def generate_kinetic_sequence(audio_path, asset_dir, output_path):
-    import librosa
     import glob
+    import librosa
+    from moviepy import AudioFileClip, VideoFileClip, concatenate_videoclips
 
     y, sr = librosa.load(audio_path)
     _, beat_frames = librosa.beat.beat_track(y=y, sr=sr)

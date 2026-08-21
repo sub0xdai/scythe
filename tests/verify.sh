@@ -24,10 +24,22 @@ echo "=== 3/4 Fixture render ==="
 OUT="tests/fixtures/synthetic_project/output/render.mp4"
 [ -s "$OUT" ] || { echo "FAIL: $OUT missing or empty"; exit 1; }
 
-DURATION="$(podman run --rm --entrypoint ffprobe -v "$(pwd):/app:Z" kinetic-renderer \
+STREAMS_JSON="$(podman run --rm --entrypoint ffprobe -v "$(pwd):/app:Z" kinetic-renderer \
+    -v error -show_entries stream=codec_type,codec_name,width,height,r_frame_rate \
+    -of json "$OUT")"
+python3 -c "
+import json, sys
+data = json.loads(sys.argv[1])
+video = next(s for s in data['streams'] if s['codec_type'] == 'video')
+audio = next(s for s in data['streams'] if s['codec_type'] == 'audio')
+assert (video['codec_name'], video['width'], video['height'], video['r_frame_rate']) == ('h264', 360, 640, '15/1'), video
+assert audio['codec_name'] == 'aac', audio
+print('streams OK')
+" "$STREAMS_JSON"
+duration="$(podman run --rm --entrypoint ffprobe -v "$(pwd):/app:Z" kinetic-renderer \
     -v error -show_entries format=duration -of csv=p=0 "$OUT")"
-python3 -c "import sys; assert float(sys.argv[1]) > 0.0, 'render duration must be > 0'" "$DURATION"
-echo "Render OK: duration=${DURATION}s"
+python3 -c "import sys; assert float(sys.argv[1]) > 0.0, 'render duration must be > 0'" "$duration"
+echo "Render OK: ${duration}s (h264 360x640@15, aac)"
 
 echo ""
 echo "=== 4/4 Negative gate test (missing asset) ==="

@@ -1,6 +1,6 @@
-# validation - Delta Spec
+# validation - Living Spec
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Cutlist schema enforcement
 
@@ -11,21 +11,18 @@ The render entry point MUST validate `prompts/cutlist.json` against `schemas/cut
 - GIVEN a cutlist that satisfies the schema
 - WHEN the render starts
 - THEN validation passes and rendering proceeds
-<!-- vox:covered CP-2 -->
 
 #### Scenario: Invalid cutlist aborts
 
 - GIVEN a cutlist whose second segment has an end timestamp earlier than its start
 - WHEN the render starts
 - THEN the process exits non-zero with a violation message naming segment index 1
-<!-- vox:covered CP-1 -->
 
 #### Scenario: Cross-segment rule enforced
 
 - GIVEN a cutlist where segment[i].end is not equal to segment[i+1].start
 - WHEN the render starts
 - THEN the process exits non-zero naming the offending timestamps
-<!-- vox:covered CP-1 -->
 
 ### Requirement: Pre-flight asset validation
 
@@ -36,21 +33,18 @@ Before rendering, every non-null asset referenced by the cutlist MUST exist rela
 - GIVEN a cutlist referencing `raw_footage/ghost.mp4` which does not exist
 - WHEN the render starts
 - THEN the process exits non-zero listing the missing file
-<!-- vox:covered CP-1 -->
 
 #### Scenario: Zero-byte asset aborts
 
 - GIVEN a cutlist referencing a zero-byte asset file
 - WHEN the render starts
 - THEN the process exits non-zero naming the corrupt file
-<!-- vox:covered CP-1 -->
 
 #### Scenario: Corrupt media aborts
 
 - GIVEN a cutlist referencing a file whose video stream cannot be probed
 - WHEN the render starts
 - THEN the process exits non-zero naming the file and the probe failure
-<!-- vox:covered CP-1 -->
 
 ### Requirement: Synthetic fixture project
 
@@ -61,14 +55,12 @@ The repo MUST contain a fixture project with reproducible assets: a tiny video c
 - GIVEN the checked-in generator script
 - WHEN it runs against an empty fixture directory
 - THEN it produces the video, image, soundtrack, voiceover, and cutlist files
-<!-- vox:covered CP-2 -->
 
 #### Scenario: Fixture renders
 
 - GIVEN the generated fixture project
 - WHEN `python main.py --project tests/fixtures/synthetic_project` runs
 - THEN it exits 0 and produces `output/render.mp4` with duration greater than zero
-<!-- vox:covered CP-2 -->
 
 ### Requirement: Fixture verification command
 
@@ -79,11 +71,9 @@ The repo MUST ship a single verification command that runs the validation gate a
 - GIVEN a freshly generated fixture
 - WHEN the verification command runs
 - THEN it exits 0
-<!-- vox:covered CP-2 -->
 
 #### Scenario: Gate fails on broken cutlist
 
 - GIVEN the fixture cutlist mutated to reference a missing asset
 - WHEN the verification command runs
 - THEN it exits non-zero and reports the missing asset
-<!-- vox:covered CP-2 -->

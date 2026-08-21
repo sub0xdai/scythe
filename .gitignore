@@ -12,3 +12,9 @@ Thumbs.db
 # Editor
 .vscode/
 .idea/
+
+# Generated fixture media (Spec A)
+tests/fixtures/*/raw_footage/*.mp4
+tests/fixtures/*/raw_footage/*.png
+tests/fixtures/*/audio/*.wav
+tests/fixtures/*/output/
