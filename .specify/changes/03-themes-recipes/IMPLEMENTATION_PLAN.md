@@ -37,7 +37,7 @@ Key design decisions:
 - **Commit message**: `feat: theme profiles with LUT grading`
 - Completed 2026-06-01 by /skill:vox build.
 
-### CP-2: Parameterized transitions and easing
+### CP-2: Parameterized transitions and easing ✅
 
 - **Touches**: `src/compiler/graph.py`, `src/compiler/video.py`, `tests/test_compiler.py`, `tests/test_themes.py`
 - **Tasks**:
@@ -47,6 +47,7 @@ Key design decisions:
   4. Tests: cross_dissolve emits `xfade=transition=fade` with the computed offset; dip_to_black emits `fadeblack`; cubic easing emits the smoothstep expression in the zoompan z; luma_wipe emits the luma transition plus the geq map input; hard-cut default still emits `concat=n=4` and the contract duration stays 4.0; too-long transition duration aborts; the fixture render with a cross_dissolve theme produces the shorter duration and passes ffprobe.
 - **Verification**: `podman run --rm --entrypoint python -v "$(pwd):/app:Z" kinetic-renderer -m unittest discover -s tests -v` prints `OK`; `tests/verify.sh` exits 0 (ALL GATES PASSED, hard-cut default unchanged).
 - **Commit message**: `feat: parameterized transitions and ken burns easing`
+- Completed 2026-06-01 by /skill:vox build.
 
 ## Risks & Open Questions
 

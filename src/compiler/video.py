@@ -33,14 +33,19 @@ def filter_chain(filter_name):
     raise ValueError(f"unknown filter: {filter_name}")
 
 
-def zoompan_chain(effect_name, width, height, fps, frame_count):
+def zoompan_chain(effect_name, width, height, fps, frame_count, easing="linear"):
     """Return the zoompan node for a motion effect, or "" for identity."""
     if effect_name in (None, "strobe", "word_flash"):
         return ""
+    t = f"in/{frame_count}"
+    if easing in ("cubic", "bezier"):
+        eased = f"({t}*{t}*(3-2*{t}))"  # smoothstep
+    else:
+        eased = t
     if effect_name == "ken_burns_slow":
-        zoom = f"1+0.08*in/{frame_count}"
+        zoom = f"1+0.08*{eased}"
     elif effect_name == "ken_burns_fast":
-        zoom = f"1+0.15*in/{frame_count}"
+        zoom = f"1+0.15*{eased}"
     elif effect_name == "snap_zoom":
         zoom = f"if(gt(in,{frame_count}/2),1.3,1)"
     else:

@@ -135,5 +135,108 @@ class ThemeIntegrationTests(unittest.TestCase):
         self.assertIn("schema", result.stdout.lower())
 
 
+SEGMENTS_3 = [
+    {"start": 0.0, "end": 2.0, "phase": "hook", "text": "THE HOOK",
+     "asset": "raw_footage/clip.mp4", "filter": "grayscale",
+     "effect": "ken_burns_slow"},
+    {"start": 2.0, "end": 4.0, "phase": "kinetic_cut", "text": None,
+     "asset": "raw_footage/photo.png"},
+    {"start": 4.0, "end": 6.0, "phase": "kinetic_cut", "text": None,
+     "asset": "raw_footage/clip.mp4", "filter": "color_invert",
+     "effect": None},
+]
+
+
+class TransitionTests(unittest.TestCase):
+    def test_cross_dissolve_emits_xfade(self):
+        config = dict(BASE_CONFIG, transition_mode="cross_dissolve",
+                      transition_duration=0.5)
+        graph = compile_graph(config, SEGMENTS, AUDIO, ".")
+        self.assertIn("xfade=transition=fade:duration=0.5:offset=1.5",
+                      graph.filter_complex)
+        self.assertNotIn("concat=n=2", graph.filter_complex)
+        self.assertAlmostEqual(graph.duration, 3.5)
+
+    def test_dip_to_black(self):
+        config = dict(BASE_CONFIG, transition_mode="dip_to_black",
+                      transition_duration=0.5)
+        graph = compile_graph(config, SEGMENTS, AUDIO, ".")
+        self.assertIn("xfade=transition=fadeblack", graph.filter_complex)
+
+    def test_dip_to_white(self):
+        config = dict(BASE_CONFIG, transition_mode="dip_to_white")
+        graph = compile_graph(config, SEGMENTS, AUDIO, ".")
+        self.assertIn("xfade=transition=fadewhite", graph.filter_complex)
+
+    def test_luma_wipe(self):
+        config = dict(BASE_CONFIG, transition_mode="luma_wipe")
+        graph = compile_graph(config, SEGMENTS, AUDIO, ".")
+        self.assertIn("transition=luma", graph.filter_complex)
+        self.assertIn("geq=", graph.filter_complex)
+
+    def test_multi_xfade_offsets(self):
+        config = dict(BASE_CONFIG, transition_mode="cross_dissolve",
+                      transition_duration=0.5)
+        graph = compile_graph(config, SEGMENTS_3, AUDIO, ".")
+        self.assertIn("offset=1.5", graph.filter_complex)  # T_1 - d
+        self.assertIn("offset=3", graph.filter_complex)    # T_2 - 2d
+        self.assertAlmostEqual(graph.duration, 5.0)
+
+    def test_too_long_transition_raises(self):
+        config = dict(BASE_CONFIG, transition_mode="cross_dissolve",
+                      transition_duration=3.0)
+        with self.assertRaises(ValueError):
+            compile_graph(config, SEGMENTS, AUDIO, ".")
+
+    def test_unknown_transition_raises(self):
+        config = dict(BASE_CONFIG, transition_mode="warp")
+        with self.assertRaises(ValueError):
+            compile_graph(config, SEGMENTS, AUDIO, ".")
+
+    def test_hard_cut_unchanged(self):
+        graph = compile_graph(BASE_CONFIG, SEGMENTS, AUDIO, ".")
+        self.assertIn("concat=n=2", graph.filter_complex)
+        self.assertAlmostEqual(graph.duration, 4.0)
+
+    def test_cubic_easing_in_zoompan(self):
+        config = dict(BASE_CONFIG, ken_burns_easing="cubic")
+        graph = compile_graph(config, SEGMENTS, AUDIO, ".")
+        self.assertIn("3-2*", graph.filter_complex)
+
+    def test_linear_default_easing(self):
+        graph = compile_graph(BASE_CONFIG, SEGMENTS, AUDIO, ".")
+        self.assertNotIn("3-2*", graph.filter_complex)
+
+    def test_cross_dissolve_render_duration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "config.json").write_text(json.dumps({
+                "theme": "clean_editorial",
+                "resolution": [360, 640], "fps": 15,
+                "font": "LiberationSerif-Bold", "font_size": 28,
+            }))
+            prompts = Path(tmp, "prompts")
+            prompts.mkdir(parents=True)
+            (prompts / "cutlist.json").write_text(json.dumps([
+                {"start": 0.0, "end": 2.0, "phase": "hook",
+                 "text": None, "asset": None,
+                 "filter": "white_flash", "effect": None},
+                {"start": 2.0, "end": 4.0, "phase": "kinetic_cut",
+                 "text": None, "asset": None,
+                 "filter": "grayscale", "effect": None},
+            ]))
+            result = subprocess.run(
+                [sys.executable, "main.py", "--project", tmp],
+                cwd=str(REPO_ROOT), capture_output=True, text=True,
+                timeout=300,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", str(Path(tmp, "output", "render.mp4"))],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertAlmostEqual(float(probe.stdout.strip()), 3.7, delta=0.1)
+
+
 if __name__ == "__main__":
     unittest.main()

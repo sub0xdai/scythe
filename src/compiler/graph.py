@@ -34,7 +34,7 @@ def _fmt(value):
     return f"{value:g}"
 
 
-def _segment_chain(label, seg, width, height, fps):
+def _segment_chain(label, seg, width, height, fps, easing="linear"):
     start = seg["start"]
     duration = seg["end"] - start
     filter_name = seg.get("filter")
@@ -60,7 +60,7 @@ def _segment_chain(label, seg, width, height, fps):
     filters = filter_chain(filter_name)
     if filters:
         parts.append(filters)
-    zoompan = zoompan_chain(effect_name, width, height, fps, frame_count)
+    zoompan = zoompan_chain(effect_name, width, height, fps, frame_count, easing)
     if zoompan:
         parts.append(zoompan)
     parts.append("setsar=1")
@@ -115,6 +115,57 @@ def _audio_chains(audio, duration, config, audio_input_index, inputs):
             f"[aout_raw]{loudnorm}[aout]"], "[aout]"
 
 
+XFADE_MODES = {
+    "cross_dissolve": "fade",
+    "dip_to_black": "fadeblack",
+    "dip_to_white": "fadewhite",
+    "luma_wipe": "luma",
+}
+
+
+def _xfade_mode(mode):
+    if mode not in XFADE_MODES:
+        raise ValueError(f"unknown transition_mode: {mode}")
+    return XFADE_MODES[mode]
+
+
+def _transition_chains(segments, mode, duration_s, width, height, fps):
+    """Chained xfade nodes replacing concat. Returns (chains, output_label)."""
+    for seg in segments:
+        if seg["end"] - seg["start"] <= duration_s:
+            raise ValueError(
+                f"transition_duration {duration_s}s exceeds a segment duration")
+
+    if mode == "luma_wipe":
+        count = len(segments) - 1
+        labels = "".join(f"[m{k}]" for k in range(count))
+        chains = [
+            f"nullsrc=s={width}x{height}:r={fps}:d={_fmt(segments[-1]['end'])},"
+            f"geq=r='X*255/{width}':g='X*255/{width}':b='X*255/{width}'[m0]",
+            f"[m0]split={count}{labels}",
+        ]
+        first = "[seg0]"
+        for k in range(1, len(segments)):
+            offset = segments[k]["start"] - k * duration_s
+            out = "[vcat]" if k == len(segments) - 1 else f"[vx{k}]"
+            chains.append(
+                f"{first}[seg{k}][m{k-1}]xfade=transition=luma"
+                f":duration={_fmt(duration_s)}:offset={_fmt(offset)}{out}")
+            first = out
+        return chains, "[vcat]"
+
+    chains = []
+    first = "[seg0]"
+    for k in range(1, len(segments)):
+        offset = segments[k]["start"] - k * duration_s
+        out = "[vcat]" if k == len(segments) - 1 else f"[vx{k}]"
+        chains.append(
+            f"{first}[seg{k}]xfade=transition={_xfade_mode(mode)}"
+            f":duration={_fmt(duration_s)}:offset={_fmt(offset)}{out}")
+        first = out
+    return chains, "[vcat]"
+
+
 def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
                    ass_path=None):
     """Compile config + segments (+ audio) into one ffmpeg invocation.
@@ -162,10 +213,11 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
             split_labels[index] = [f"[{index}:v]"]
 
     ref_counter = {}
+    easing = config.get("ken_burns_easing", "linear")
     for i, seg in enumerate(segments):
         asset = seg.get("asset")
         if asset is None or seg.get("filter") == "white_flash":
-            chain = _segment_chain(None, seg, width, height, fps)
+            chain = _segment_chain(None, seg, width, height, fps, easing)
         else:
             # theme defaults apply to asset segments lacking explicit values
             if seg.get("filter") is None and config.get("default_filter"):
@@ -175,11 +227,19 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
             index = asset_index[os.path.join(project_dir, seg["asset"])]
             label = split_labels[index][ref_counter.get(index, 0)]
             ref_counter[index] = ref_counter.get(index, 0) + 1
-            chain = _segment_chain(label, seg, width, height, fps)
+            chain = _segment_chain(label, seg, width, height, fps, easing)
         chains.append(f"{chain}[seg{i}]")
 
-    seg_labels = "".join(f"[seg{i}]" for i in range(len(segments)))
-    chains.append(f"{seg_labels}concat=n={len(segments)}:v=1:a=0[vcat]")
+    transition_mode = config.get("transition_mode", "hard_cut")
+    if transition_mode != "hard_cut" and len(segments) > 1:
+        transition_d = config.get("transition_duration", 0.5)
+        duration = segments[-1]["end"] - (len(segments) - 1) * transition_d
+        t_chains, _ = _transition_chains(
+            segments, transition_mode, transition_d, width, height, fps)
+        chains.extend(t_chains)
+    else:
+        seg_labels = "".join(f"[seg{i}]" for i in range(len(segments)))
+        chains.append(f"{seg_labels}concat=n={len(segments)}:v=1:a=0[vcat]")
     chains.append(f"[vcat]fps={fps},trim=duration={_fmt(duration)},setpts=PTS-STARTPTS[vfps]")
     current = "[vfps]"
     lut = config.get("lut")

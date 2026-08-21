@@ -59,12 +59,14 @@ The theme MUST define a transition model supporting at least: hard cut (default)
 - WHEN the graph compiles
 - THEN the graph contains an xfade node with the configured duration
 
+<!-- vox:covered CP-2 -->
 #### Scenario: Dip to black
 
 - GIVEN a theme with dip-to-black transitions on drop boundaries
 - WHEN the graph compiles
 - THEN the graph contains a fade node on the drop boundary
 
+<!-- vox:covered CP-2 -->
 #### Scenario: Cubic easing
 
 - GIVEN a theme with `ken_burns_easing: cubic`
@@ -75,6 +77,7 @@ The theme MUST define a transition model supporting at least: hard cut (default)
 
 New filters and effects defined by themes MUST register in `schemas/filter-effect-matrix.json`, which remains the single source of truth for filter and effect compatibility. The validation gate MUST reject cutlists referencing filters or effects not present in the matrix.
 
+<!-- vox:covered CP-2 -->
 #### Scenario: Unknown filter rejected
 
 - GIVEN a cutlist using a filter not present in the matrix
