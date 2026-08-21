@@ -1,4 +1,6 @@
-# scythe - headless video factory
+# scythe
+
+_headless video factory_
 
 ![scythe](scythe.jpg)
 
