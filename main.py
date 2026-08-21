@@ -27,6 +27,7 @@ import subprocess
 import sys
 
 from src.compiler import AudioSpec, compile_graph
+from src.compiler.text import build_ass
 from src.gpu import (
     CPU_PROFILE,
     dry_run,
@@ -52,6 +53,9 @@ DEFAULTS = {
     "voice_cleanup": True,
     "duck_threshold": 0.02,
     "duck_ratio": 2,
+    "text_box_width": 0.8,
+    "safe_zone_top": 0.12,
+    "safe_zone_bottom": 0.25,
 }
 
 # Presets for common formats
@@ -259,7 +263,14 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
     print("Probing hardware...")
     profile = _select_profile()
     print(f"  Encoder: {profile.encoder}")
-    graph = compile_graph(config, segments, audio, project_dir, profile)
+    ass_path = None
+    ass_content = build_ass(segments, config)
+    if ass_content:
+        ass_path = os.path.join(output_dir, "subtitles.ass")
+        with open(ass_path, "w") as f:
+            f.write(ass_content)
+        print(f"  Subtitles: {ass_path}")
+    graph = compile_graph(config, segments, audio, project_dir, profile, ass_path)
 
     cmd = ["ffmpeg", "-y", *profile.extra_args]
     for arg_list in graph.input_args:

@@ -33,8 +33,8 @@ SEGMENTS = [
 AUDIO = AudioSpec(soundtrack="audio/soundtrack.wav", voiceover="audio/voiceover.wav")
 
 
-def _graph(audio=AUDIO, segments=SEGMENTS):
-    return compile_graph(CONFIG, segments, audio)
+def _graph(audio=AUDIO, segments=SEGMENTS, ass_path=None):
+    return compile_graph(CONFIG, segments, audio, ".", None, ass_path)
 
 
 class GraphStructureTests(unittest.TestCase):
@@ -72,9 +72,9 @@ class GraphStructureTests(unittest.TestCase):
         self.assertIn("if(gt(in,15/2),1.3,1)", graph.filter_complex)
 
     def test_drawtext_carries_text(self):
-        graph = _graph()
-        self.assertIn("drawtext=text=THE PROBLEM", graph.filter_complex)
-        self.assertIn("enable='between(t,0,2)'", graph.filter_complex)
+        graph = _graph(ass_path="output/subtitles.ass")
+        self.assertIn("subtitles=filename=output/subtitles.ass", graph.filter_complex)
+        self.assertNotIn("drawtext", graph.filter_complex)
 
     def test_ducking_nodes(self):
         graph = _graph()

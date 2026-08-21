@@ -121,8 +121,10 @@ class CompilerProfileTests(unittest.TestCase):
         self.assertEqual(graph.video_map, "[vout]")
 
     def test_hw_chain_appended_after_text(self):
-        graph = compile_graph(CONFIG, SEGMENTS, AUDIO, ".", PROFILE_TABLE["h264_nvenc"])
-        self.assertIn("[vt1]format=nv12,hwupload_cuda[vout]", graph.filter_complex)
+        graph = compile_graph(CONFIG, SEGMENTS, AUDIO, ".",
+                              PROFILE_TABLE["h264_nvenc"],
+                              ass_path="output/subtitles.ass")
+        self.assertIn("[vsub]format=nv12,hwupload_cuda[vout]", graph.filter_complex)
 
 
 class IntegrationTests(unittest.TestCase):

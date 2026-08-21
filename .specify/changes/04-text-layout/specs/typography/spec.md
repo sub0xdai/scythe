@@ -12,6 +12,7 @@ Text overlays MUST be generated as a styled .ass file and burned through the sub
 - WHEN the graph compiles
 - THEN a .ass file is written for the render and the graph contains a subtitles node referencing it
 
+<!-- vox:covered CP-1 -->
 #### Scenario: No TextClip path
 
 - GIVEN the fixture cutlist with text segments
@@ -32,12 +33,14 @@ Text MUST wrap to a configured bounding box defined by canvas-relative width and
 
 The theme MUST define safe-zone margins per orientation with documented defaults for 9:16 vertical (bottom 25 percent, top 12 percent). Text positions MUST clamp into the safe zone for the canvas orientation.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Caption stays safe
 
 - GIVEN a 1080x1920 canvas with default vertical safe zones
 - WHEN a bottom-positioned caption is laid out
 - THEN the caption bottom edge is at or above 75 percent canvas height
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Safe zones configurable
 
 - GIVEN a theme with custom safe-zone margins
@@ -48,6 +51,7 @@ The theme MUST define safe-zone margins per orientation with documented defaults
 
 The `word_flash` effect MUST be a real implementation using .ass karaoke `\k` tags. Words MUST reveal sequentially across the segment duration. Timing MUST be computed from segment duration and word count. This replaces the current passthrough behavior.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Words reveal in order
 
 - GIVEN a 2.0 second segment with `word_flash` and a 4-word text
@@ -58,8 +62,10 @@ The `word_flash` effect MUST be a real implementation using .ass karaoke `\k` ta
 
 The cutlist MUST support a `lower_third` style object with a title line and a subtitle line. It MUST render as an animated lower-third inside the safe zone, appearing at the segment start.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Lower third renders
 
 - GIVEN a cutlist segment carrying a lower_third object
 - WHEN the graph compiles
 - THEN the .ass contains the two-line lower-third block at the safe-zone position with entrance timing at segment start
+<!-- vox:covered CP-1 -->

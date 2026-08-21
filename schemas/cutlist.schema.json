@@ -67,6 +67,15 @@
       "clip_end": {
         "type": "number",
         "description": "Subclip end offset in seconds within the source asset. Omit to auto-compute from segment duration."
+      },
+      "lower_third": {
+        "type": ["object", "null"],
+        "description": "Lower-third overlay with a title line and a subtitle line.",
+        "properties": {
+          "title": { "type": "string" },
+          "subtitle": { "type": "string" }
+        },
+        "required": ["title", "subtitle"]
       }
     }
   },

@@ -12,15 +12,6 @@ from src.compiler.video import filter_chain, zoompan_chain
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".avi"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
-FONT_FILES = {
-    "LiberationSerif-Bold": "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
-    "LiberationSerif": "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
-    "LiberationSans-Bold": "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-    "LiberationSans": "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    "LiberationMono-Bold": "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
-    "LiberationMono": "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
-}
-
 
 @dataclass(frozen=True)
 class AudioSpec:
@@ -37,19 +28,6 @@ class CompiledGraph:
     video_map: str
     audio_map: str | None
     duration: float
-
-
-def _escape_text(text):
-    out = []
-    for ch in text:
-        out.append("\\" + ch if ch in "\\':,;[]%" else ch)
-    return "".join(out)
-
-
-def _font_file(font_name):
-    if font_name not in FONT_FILES:
-        raise ValueError(f"unknown font: {font_name}")
-    return FONT_FILES[font_name]
 
 
 def _fmt(value):
@@ -137,13 +115,15 @@ def _audio_chains(audio, duration, config, audio_input_index, inputs):
             f"[aout_raw]{loudnorm}[aout]"], "[aout]"
 
 
-def compile_graph(config, segments, audio=None, project_dir=".", profile=None):
+def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
+                   ass_path=None):
     """Compile config + segments (+ audio) into one ffmpeg invocation.
 
     Asset paths in segments are resolved against project_dir. AudioSpec
     paths are used as given (main.py resolves them against project_dir).
     A HardwareProfile with a non-empty hw_chain appends upload nodes
     before the encoder; None or CPU_PROFILE emits the plain CPU graph.
+    ass_path, when set, burns the generated .ass via the subtitles filter.
     """
     assert isinstance(segments, list) and segments, "cutlist must be a non-empty array"
     width, height = config["resolution"]
@@ -197,27 +177,11 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None):
     chains.append(f"{seg_labels}concat=n={len(segments)}:v=1:a=0[vcat]")
     chains.append(f"[vcat]fps={fps},trim=duration={_fmt(duration)},setpts=PTS-STARTPTS[vfps]")
 
-    current = "[vfps]"
-    text_seq = 0
-    for seg in segments:
-        text = seg.get("text")
-        if not text:
-            continue
-        params = [
-            f"text={_escape_text(text)}",
-            f"fontfile={_font_file(config['font'])}",
-            f"fontsize={config['font_size']}",
-            f"fontcolor={config['text_color']}",
-            f"borderw={config['stroke_width']}",
-            f"bordercolor={config['stroke_color']}",
-            "x=(w-text_w)/2",
-            "y=(h-text_h)/2",
-            f"enable='between(t,{_fmt(seg['start'])},{_fmt(seg['end'])})'",
-        ]
-        label = f"[vt{text_seq}]"
-        text_seq += 1
-        chains.append(f"{current}drawtext={':'.join(params)}{label}")
-        current = label
+    if ass_path:
+        chains.append(f"[vfps]subtitles=filename={ass_path}[vsub]")
+        current = "[vsub]"
+    else:
+        current = "[vfps]"
 
     if profile is not None and profile.hw_chain:
         chains.append(f"{current}{profile.hw_chain}[vout]")
