@@ -13,7 +13,7 @@ if [ -z "$NAME" ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONTENT_DIR="$(dirname "$SCRIPT_DIR")"
+CONTENT_DIR="$SCRIPT_DIR"
 TEMPLATE="$CONTENT_DIR/templates/project"
 TARGET="$CONTENT_DIR/projects/$NAME"
 

@@ -9,29 +9,20 @@ _headless video factory_
 ## Quick Start
 
 ```bash
-# 1. Install dependencies (once)
-./scripts/install_deps.sh
-
-# 2. Create a project
-./bootstrap.sh my-video
-
-# 3. Drop your assets
-cp ~/Downloads/soundtrack.mp3 projects/my-video/audio/
-cp ~/Downloads/voiceover.wav projects/my-video/audio/   # optional
-cp ~/clips/*.mp4 projects/my-video/raw_footage/
-cp ~/logo.png projects/my-video/overlays/
-
-# 4. Pick a theme (optional, default is brutalist)
-echo '{ "theme": "clean_editorial" }' > projects/my-video/config.json
-
-# 5. Generate a cut-list
-#    Feed prompts/brutalist-video-prompt.md to any LLM.
-#    Save the JSON output as projects/my-video/prompts/cutlist.json
-
-# 6. Render
-./render.sh projects/my-video
-#    or: python main.py --project projects/my-video
+curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/setup.sh | bash -s my-video
 ```
+
+One command: installs host deps, clones the engine if missing, scaffolds the project, ingests assets, writes a valid default cutlist, and renders.
+
+Skip fetches and drop assets in yourself:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/sub0xdai/scythe/master/setup.sh | bash -s my-video --no-audio --no-video --no-images
+cp ~/clips/*.mp4 projects/my-video/raw_footage/
+./render.sh projects/my-video
+```
+
+Prefer an LLM cutlist? Feed `prompts/brutalist-video-prompt.md` to any LLM, save the JSON as `projects/my-video/prompts/cutlist.json`, then `./render.sh projects/my-video`.
 
 ## What It Does
 
