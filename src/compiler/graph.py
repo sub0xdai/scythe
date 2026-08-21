@@ -90,8 +90,12 @@ def _segment_chain(label, seg, width, height, fps):
     return label + ",".join(parts)
 
 
-def _audio_chains(audio, duration, audio_offset, audio_input_index, inputs):
-    """Register audio inputs and return (chains, audio_map)."""
+def _audio_chains(audio, duration, config, audio_input_index, inputs):
+    """Register audio inputs and return (chains, audio_map).
+
+    Chain: voice cleanup -> sidechain ducking on the soundtrack ->
+    amix -> loudnorm to the configured LUFS target.
+    """
     if audio is None or (audio.soundtrack is None and audio.voiceover is None):
         return [], None
 
@@ -105,16 +109,32 @@ def _audio_chains(audio, duration, audio_offset, audio_input_index, inputs):
         inputs.append(["-i", audio.voiceover])
         vo_label = f"[{audio_input_index}:a]"
 
-    trim = f"atrim=start={_fmt(audio_offset)}:end={_fmt(audio_offset + duration)}"
+    offset = config.get("audio_offset", 0.0)
+    trim = f"atrim=start={_fmt(offset)}:end={_fmt(offset + duration)}"
+    loudnorm = ("loudnorm=I={}:TP=-1.5:LRA=11,aresample=48000"
+                .format(_fmt(config.get("lufs_target", -14))))
+
     if st_label and vo_label:
-        return [
-            f"{st_label}volume=0.3,{trim},asetpts=PTS-STARTPTS[st]",
-            f"{vo_label}{trim},asetpts=PTS-STARTPTS[vo]",
-            "[st][vo]amix=inputs=2:normalize=0:duration=first[aout]",
-        ], "[aout]"
+        threshold = config.get("duck_threshold", 0.05)
+        ratio = config.get("duck_ratio", 8)
+        chains = [f"{st_label}{trim},asetpts=PTS-STARTPTS[st_t]"]
+        if config.get("voice_cleanup", True):
+            vo_clean = ("afftdn=nf=-40:nt=w,agate=threshold=0.02:attack=20:release=250,"
+                        f"{trim},asetpts=PTS-STARTPTS[vo0]")
+        else:
+            vo_clean = f"{trim},asetpts=PTS-STARTPTS[vo0]"
+        chains.append(f"{vo_label}{vo_clean}")
+        chains.append("[vo0]asplit=2[vo_sc][vo_mix]")
+        chains.append(
+            f"[st_t][vo_sc]sidechaincompress=threshold={_fmt(threshold)}"
+            f":ratio={_fmt(ratio)}:attack=20:release=500:makeup=1[st_ducked]")
+        chains.append("[st_ducked][vo_mix]amix=inputs=2:normalize=0:duration=first[aout_raw]")
+        chains.append(f"[aout_raw]{loudnorm}[aout]")
+        return chains, "[aout]"
 
     label = st_label or vo_label
-    return [f"{label}{trim},asetpts=PTS-STARTPTS[aout]"], "[aout]"
+    return [f"{label}{trim},asetpts=PTS-STARTPTS[aout_raw]",
+            f"[aout_raw]{loudnorm}[aout]"], "[aout]"
 
 
 def compile_graph(config, segments, audio=None, project_dir=".", profile=None):
@@ -204,7 +224,7 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None):
         current = "[vout]"
 
     audio_chains, audio_map = _audio_chains(
-        audio, duration, config.get("audio_offset", 0.0), len(inputs), inputs)
+        audio, duration, config, len(inputs), inputs)
     chains.extend(audio_chains)
 
     return CompiledGraph(inputs, ";".join(chains), current, audio_map, duration)

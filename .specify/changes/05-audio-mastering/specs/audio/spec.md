@@ -42,8 +42,10 @@ Voiceover MUST pass through `afftdn` for noise suppression and `agate` for silen
 
 All audio processing MUST be graph nodes: sidechaincompress, loudnorm, afftdn, agate, and amix. No post-hoc Python audio processing MAY remain in the render path.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Nodes present
 
 - GIVEN the fixture with a voiceover
 - WHEN the graph compiles
 - THEN the `filter_complex` string contains sidechaincompress and loudnorm nodes
+<!-- vox:covered CP-1 -->

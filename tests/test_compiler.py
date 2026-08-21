@@ -78,7 +78,7 @@ class GraphStructureTests(unittest.TestCase):
 
     def test_ducking_nodes(self):
         graph = _graph()
-        self.assertIn("volume=0.3", graph.filter_complex)
+        self.assertIn("sidechaincompress", graph.filter_complex)
         self.assertIn("amix=inputs=2:normalize=0", graph.filter_complex)
 
     def test_audio_absent_when_none(self):
@@ -121,7 +121,7 @@ class GraphStructureTests(unittest.TestCase):
         graph = _graph()
         self.assertIn("[v0_0]trim=", graph.filter_complex)
         self.assertIn("[1:v]trim=", graph.filter_complex)
-        self.assertIn("[2:a]volume=", graph.filter_complex)
+        self.assertIn("[2:a]atrim=", graph.filter_complex)
 
 
 if __name__ == "__main__":
