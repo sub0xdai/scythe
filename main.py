@@ -42,6 +42,9 @@ from moviepy import (
 )
 
 
+from src.validator import validate
+
+
 # ── Defaults ──────────────────────────────────────────────────────────────
 
 DEFAULTS = {
@@ -286,6 +289,15 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
 
     with open(cutlist_path) as f:
         segments = json.load(f)
+
+    violations = validate(segments, project_dir)
+    if violations:
+        print("Cutlist validation failed:")
+        for v in violations:
+            idx = f"segment {v.segment_index}: " if v.segment_index is not None else ""
+            print(f"  - [{v.rule}] {idx}{v.message}")
+        print(f"  ({len(violations)} violation(s))")
+        sys.exit(1)
 
     output_dir = os.path.join(project_dir, "output")
     os.makedirs(output_dir, exist_ok=True)

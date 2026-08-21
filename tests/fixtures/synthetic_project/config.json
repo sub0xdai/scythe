@@ -1,0 +1,7 @@
+{
+  "resolution": [360, 640],
+  "fps": 15,
+  "font": "LiberationSerif-Bold",
+  "font_size": 28,
+  "audio_offset": 0
+}

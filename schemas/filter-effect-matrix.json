@@ -1,0 +1,86 @@
+{
+  "$description": "Compatibility matrix for n0x-content filter × effect combinations. Generated from main.py apply_filter() and apply_effect() implementations. 'valid' = filter and effect compose correctly. 'nonsensical' = produces invisible/no-op output (e.g. white_flash replaces asset, motion effects operate on blank frame). 'noop' = the effect is an identity transform but does not break anything.",
+
+  "filters": {
+    "grayscale":         { "impl": "vfx.BlackAndWhite()", "assetPreserving": true },
+    "color_invert":      { "impl": "vfx.InvertColors()", "assetPreserving": true },
+    "high_contrast_green": { "impl": "_contrast_crush(accent=green)", "assetPreserving": true },
+    "high_contrast_red":   { "impl": "_contrast_crush(accent=red)", "assetPreserving": true },
+    "white_flash":       { "impl": "ColorClip(white) — replaces asset entirely", "assetPreserving": false },
+    "chromatic_aberration": { "impl": "_chromatic_aberration() — offset R/B channels", "assetPreserving": true },
+    "film_grain":        { "impl": "_film_grain() — 4% monochrome noise overlay", "assetPreserving": true },
+    "color_crush":       { "impl": "_contrast_crush() — destroy midtones to black/white", "assetPreserving": true }
+  },
+
+  "effects": {
+    "ken_burns_slow":  { "type": "motion", "impl": "progressive 8% zoom", "noopWhenBlank": true },
+    "ken_burns_fast":  { "type": "motion", "impl": "progressive 15% zoom", "noopWhenBlank": true },
+    "snap_zoom":       { "type": "motion", "impl": "instant 30% zoom at midpoint", "noopWhenBlank": true },
+    "strobe":          { "type": "identity", "impl": "no-op — returns clip unchanged", "noopWhenBlank": false },
+    "word_flash":      { "type": "identity", "impl": "no-op — text timing passthrough", "noopWhenBlank": false }
+  },
+
+  "matrix": {
+    "grayscale": {
+      "ken_burns_slow":  "valid",
+      "ken_burns_fast":  "valid",
+      "snap_zoom":       "valid",
+      "strobe":          "valid",
+      "word_flash":      "valid"
+    },
+    "color_invert": {
+      "ken_burns_slow":  "valid",
+      "ken_burns_fast":  "valid",
+      "snap_zoom":       "valid",
+      "strobe":          "valid",
+      "word_flash":      "valid"
+    },
+    "high_contrast_green": {
+      "ken_burns_slow":  "valid",
+      "ken_burns_fast":  "valid",
+      "snap_zoom":       "valid",
+      "strobe":          "valid",
+      "word_flash":      "valid"
+    },
+    "high_contrast_red": {
+      "ken_burns_slow":  "valid",
+      "ken_burns_fast":  "valid",
+      "snap_zoom":       "valid",
+      "strobe":          "valid",
+      "word_flash":      "valid"
+    },
+    "white_flash": {
+      "ken_burns_slow":  "nonsensical",
+      "ken_burns_fast":  "nonsensical",
+      "snap_zoom":       "nonsensical",
+      "strobe":          "nonsensical",
+      "word_flash":      "nonsensical"
+    },
+    "chromatic_aberration": {
+      "ken_burns_slow":  "valid",
+      "ken_burns_fast":  "valid",
+      "snap_zoom":       "valid",
+      "strobe":          "valid",
+      "word_flash":      "valid"
+    },
+    "film_grain": {
+      "ken_burns_slow":  "valid",
+      "ken_burns_fast":  "valid",
+      "snap_zoom":       "valid",
+      "strobe":          "valid",
+      "word_flash":      "valid"
+    },
+    "color_crush": {
+      "ken_burns_slow":  "valid",
+      "ken_burns_fast":  "valid",
+      "snap_zoom":       "valid",
+      "strobe":          "valid",
+      "word_flash":      "valid"
+    }
+  },
+
+  "adjacencyRule": {
+    "description": "No two consecutive segments may use the same filter. white_flash always varies from its neighbors since the filter set has 8 entries.",
+    "validation": "segment[i].filter != segment[i+1].filter for all i"
+  }
+}

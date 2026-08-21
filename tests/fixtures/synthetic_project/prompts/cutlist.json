@@ -1,0 +1,38 @@
+[
+  {
+    "start": 0.0,
+    "end": 2.0,
+    "phase": "hook",
+    "text": "THE PROBLEM",
+    "asset": "raw_footage/clip.mp4",
+    "filter": "grayscale",
+    "effect": "ken_burns_slow"
+  },
+  {
+    "start": 2.0,
+    "end": 2.08,
+    "phase": "drop_transition",
+    "text": null,
+    "asset": null,
+    "filter": "white_flash",
+    "effect": "strobe"
+  },
+  {
+    "start": 2.08,
+    "end": 3.08,
+    "phase": "kinetic_cut",
+    "text": "THE FIX",
+    "asset": "raw_footage/photo.png",
+    "filter": "high_contrast_green",
+    "effect": "snap_zoom"
+  },
+  {
+    "start": 3.08,
+    "end": 4.0,
+    "phase": "kinetic_cut",
+    "text": "BUILD NOW",
+    "asset": "raw_footage/clip.mp4",
+    "filter": "chromatic_aberration",
+    "effect": "ken_burns_fast"
+  }
+]

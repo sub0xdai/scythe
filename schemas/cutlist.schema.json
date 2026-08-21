@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://n0x-content/schemas/cutlist.schema.json",
+  "title": "n0x-content Cutlist",
+  "description": "JSON Schema for the n0x-content kinetic video cutlist. Validates segment structure, phase durations, filter adjacency, and filter-effect compatibility. Synchronized with main.py cutlist ingestion and filter-effect-matrix.json.",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "required": ["start", "end", "phase"],
+    "properties": {
+      "start": {
+        "type": "number",
+        "minimum": 0,
+        "description": "Start timestamp in seconds."
+      },
+      "end": {
+        "type": "number",
+        "description": "End timestamp in seconds. Must be > start."
+      },
+      "phase": {
+        "type": "string",
+        "enum": ["hook", "drop_transition", "kinetic_cut"],
+        "description": "Structural phase of the video."
+      },
+      "text": {
+        "type": ["string", "null"],
+        "description": "UPPERCASE overlay text, 2-5 words. Null for flash/strobe frames."
+      },
+      "asset": {
+        "type": ["string", "null"],
+        "description": "Relative path to source file from project root. Null for generated frames (e.g. white_flash segments)."
+      },
+      "filter": {
+        "type": ["string", "null"],
+        "enum": [
+          "grayscale",
+          "color_invert",
+          "high_contrast_green",
+          "high_contrast_red",
+          "white_flash",
+          "chromatic_aberration",
+          "film_grain",
+          "color_crush",
+          null
+        ],
+        "description": "Visual filter. Must be compatible with the segment's effect per filter-effect-matrix.json."
+      },
+      "effect": {
+        "type": ["string", "null"],
+        "enum": [
+          "ken_burns_slow",
+          "ken_burns_fast",
+          "snap_zoom",
+          "strobe",
+          "word_flash",
+          null
+        ],
+        "description": "Motion effect. No-op effects (strobe, word_flash) are valid with any filter including white_flash."
+      },
+      "clip_start": {
+        "type": "number",
+        "minimum": 0,
+        "default": 0,
+        "description": "Subclip start offset in seconds within the source asset. Omit or set to 0 to use the asset from its start."
+      },
+      "clip_end": {
+        "type": "number",
+        "description": "Subclip end offset in seconds within the source asset. Omit to auto-compute from segment duration."
+      }
+    }
+  },
+  "$comment": "Cross-field rules (end > start, timeline continuity, filter adjacency) are enforced by src/validator.py; JSON Schema cannot express cross-field comparisons.",
+
+  "$defs": {
+    "phaseDurationBounds": {
+      "hook":           { "minPerSegment": 1.0, "maxPerSegment": 1.5, "minTotal": 4.0, "maxTotal": 6.0 },
+      "drop_transition": { "minPerSegment": 0.3, "maxPerSegment": 0.8, "minTotal": 0,   "maxTotal": 999 },
+      "kinetic_cut":    { "minPerSegment": 0.3, "maxPerSegment": 0.8, "minTotal": 0,   "maxTotal": 999 }
+    },
+
+    "validationRules": {
+      "noGaps": {
+        "description": "Segments must be contiguous: segment[i].end == segment[i+1].start for all i.",
+        "check": "forall i in 0..len-2: segments[i].end == segments[i+1].start"
+      },
+      "filterAdjacency": {
+        "description": "No two consecutive segments may use the same filter.",
+        "check": "forall i in 0..len-2: segments[i].filter != segments[i+1].filter"
+      },
+      "filterEffectCompatibility": {
+        "description": "If filter is 'white_flash', effect must be null or an identity effect (strobe, word_flash). Motion effects on white_flash are nonsensical.",
+        "check": "segment.filter == 'white_flash' → segment.effect in [null, 'strobe', 'word_flash']",
+        "reference": "schemas/filter-effect-matrix.json"
+      },
+      "textUppercase": {
+        "description": "All non-null text must be UPPERCASE, 2-5 words.",
+        "check": "segment.text == null or (segment.text == segment.text.toUpperCase() and 2 <= wordCount <= 5)"
+      },
+      "assetRequiredUnlessGenerated": {
+        "description": "asset must be non-null unless the segment is a generated frame (white_flash filter, or no filter with null asset).",
+        "check": "segment.asset != null or segment.filter == 'white_flash'"
+      },
+      "textNullOnFlash": {
+        "description": "Text should be null on white_flash segments.",
+        "check": "segment.filter == 'white_flash' → segment.text == null"
+      }
+    }
+  }
+}

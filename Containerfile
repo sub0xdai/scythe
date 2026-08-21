@@ -20,7 +20,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL="/usr/
 WORKDIR /app
 COPY . .
 
-RUN uv pip install --system librosa moviepy pillow numpy
+RUN uv pip install --system librosa moviepy pillow numpy jsonschema
 
 ENTRYPOINT ["python", "main.py"]
 CMD ["--project", "projects/testudo-launch"]
