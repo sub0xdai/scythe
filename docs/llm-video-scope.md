@@ -6,6 +6,15 @@ Scope for plugging an LLM video-generation API (MiniMax first, others later) int
 
 scythe composites and masters user-provided assets. LLM video APIs can GENERATE those assets from a prompt. The combination is: prompt -> generated clips -> scythe's existing validation, cut, grade, caption, and audio-master pipeline. The provider generates footage; scythe stays the editor. This is supplementation, not replacement.
 
+## Bring your own key (BYOK)
+
+The user brings their own API key for any supported provider. scythe never brokers, resells, bundles, or manages keys. Consequences:
+
+- No key storage, no billing, no rate-limit or quota responsibility, no provider legal liability in scythe.
+- Provider support is purely additive: a user with a Veo key uses Veo, a MiniMax key uses MiniMax, a Kling key uses Kling.
+- The key is an env var per provider (e.g. `MINIMAX_API_KEY`, `GEMINI_API_KEY`), never a value in config.json.
+- The provider abstraction is therefore foundational, not a later phase.
+
 ## Integration seams in the current pipeline
 
 ```
@@ -45,11 +54,11 @@ Open-weights models (Wan 2.6, HunyuanVideo) run via aggregators (fal, Replicate)
 
 ## Scoped design (what we would build if greenlit)
 
-- Flat config keys: `ai_provider`, `ai_model`, `ai_prompt`, `ai_resolution`, `ai_duration`, `ai_count`. The API key lives in an env var, never in config.json.
-- `src/providers/` with a base interface: `generate(prompt, opts) -> local clip path`, plus a MiniMax implementation (create task, poll, download).
+- Flat config keys: `ai_provider`, `ai_model`, `ai_prompt`, `ai_resolution`, `ai_duration`, `ai_count`. The API key is a provider-specific env var (BYOK), never in config.json.
+- `src/providers/` with a base interface: `generate(prompt, opts) -> local clip path`. MiniMax is the first implementation; every provider a user can bring a key for is additive.
 - `scripts/generate_clips.py <project-dir>`: prompt -> N generated clips -> `raw_footage/`. Generated clips are ordinary assets; the validation gate, `generate_cutlist.py` (which already clamps to probed clip durations), and the render pipeline consume them unchanged.
 - Phase 2 seam: a cutlist agent - one API call with `prompts/brutalist-video-prompt.md` plus the asset inventory, writing `cutlist.json`. Same prompt text, API-backed.
-- Phase 3: multi-provider via the abstraction (Veo, Runway, Kling drop in as new implementations).
+- Phase 3: additional providers behind the same interface, driven by what keys users actually have (Veo, Runway, Kling drop in as new implementations).
 
 ## Deliberate non-goals
 
@@ -64,6 +73,7 @@ Open-weights models (Wan 2.6, HunyuanVideo) run via aggregators (fal, Replicate)
 - **Licensing**: provider terms on commercial use of outputs vary. Verify per provider before shipping a phase.
 - **Quality variance**: generated clips can undershoot requested duration. `generate_cutlist.py` already probes and clamps, so a short clip degrades gracefully instead of breaking the timeline.
 - **API instability**: model names and endpoints churn (H3, M2.7, Hailuo in the same docs). The provider abstraction isolates churn to one file.
+- **API key handling**: the key is the user's own env var (BYOK). The one hard rule stays: keys never appear in config.json or the repo (relevant to the PII/secret scrub hook).
 - **Latency**: generation is minutes, not seconds, and async. The Spec F progress events cover rendering only; the generation phase gets a status line, not JSON events.
 - **Determinism**: generation is non-deterministic. scythe's byte-identical render guarantee holds for whatever clips exist; the clips themselves vary per run.
 
