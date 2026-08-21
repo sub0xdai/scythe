@@ -9,16 +9,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "=== 1/4 Generating fixture assets ==="
+echo "=== 1/5 Generating fixture assets ==="
 tests/fixtures/generate_fixture.sh
 
 echo ""
-echo "=== 2/4 Unit tests ==="
+echo "=== 2/5 Unit tests ==="
 podman image exists kinetic-renderer || podman build -t kinetic-renderer .
 podman run --rm --entrypoint python -v "$(pwd):/app:Z" kinetic-renderer -m unittest discover -s tests -v
 
 echo ""
-echo "=== 3/4 Fixture render ==="
+echo "=== 3/5 Fixture render ==="
 ./render.sh tests/fixtures/synthetic_project 2>&1 | tail -3
 
 OUT="tests/fixtures/synthetic_project/output/render.mp4"
@@ -42,7 +42,7 @@ python3 -c "import sys; assert float(sys.argv[1]) > 0.0, 'render duration must b
 echo "Render OK: ${duration}s (h264 360x640@15, aac)"
 
 echo ""
-echo "=== 4/4 Negative gate test (missing asset) ==="
+echo "=== 4/5 Negative gate test (missing asset) ==="
 BROKEN="$(mktemp -d tests/fixtures/.broken.XXXXXX)"
 trap 'rm -rf "$BROKEN"' EXIT
 cp -r tests/fixtures/synthetic_project/. "$BROKEN/"
@@ -65,6 +65,17 @@ if podman run --rm -v "$(pwd):/app:Z" kinetic-renderer --project "$BROKEN" >/tmp
 fi
 grep -q "ghost.mp4" /tmp/n0x-negative.log || { echo "FAIL: error output does not name ghost.mp4"; exit 1; }
 echo "Negative gate OK: render aborted naming ghost.mp4"
+
+echo ""
+echo "=== 5/5 --check-gpu smoke ==="
+podman run --rm --entrypoint python -v "$(pwd):/app:Z" kinetic-renderer main.py --check-gpu \
+    | python3 -c "
+import json, sys
+report = json.load(sys.stdin)
+assert report['chosen']['encoder'] == 'libx264', report['chosen']
+assert report['chosen']['dry_run_ok'] is True, report['chosen']
+print('check-gpu OK:', report['chosen']['encoder'])
+"
 
 echo ""
 echo "ALL GATES PASSED"

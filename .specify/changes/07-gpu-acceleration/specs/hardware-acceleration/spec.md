@@ -91,8 +91,10 @@ render.sh MUST support a GPU passthrough flag mapping to the podman runtime flag
 - WHEN the script runs
 - THEN podman receives `--gpus all`
 
+<!-- vox:covered CP-3 -->
 #### Scenario: VAAPI flag wired
 
 - GIVEN `./render.sh projects/x --gpu vaapi`
 - WHEN the script runs
 - THEN podman receives the `/dev/dri` device mount
+<!-- vox:covered CP-3 -->

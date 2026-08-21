@@ -155,7 +155,26 @@ Generate cut-lists by feeding `prompts/brutalist-video-prompt.md` to Claude, Cha
 
 - **System**: `ffmpeg`, `wget`, `yt-dlp` (pacman / apt / brew)
 - **Container**: Podman or Docker
-- **Container provides**: Python 3.11, MoviePy v2, librosa, Pillow, NumPy
+- **Container provides**: Python 3.11, ffmpeg, jsonschema
+
+## GPU Acceleration
+
+Renders auto-detect hardware encoders with a dry-run check (0.2s null encode). No GPU access means libx264 CPU fallback, unchanged behavior.
+
+```bash
+# NVIDIA (requires nvidia-container-toolkit on the host)
+./render.sh projects/my-video --gpu nvidia
+
+# VAAPI or QSV (passes /dev/dri through)
+./render.sh projects/my-video --gpu vaapi
+./render.sh projects/my-video --gpu qsv
+```
+
+Diagnostics and overrides:
+
+- `python main.py --check-gpu` prints the capability report (encoders, decoders, hwaccels, chosen encoder) and exits non-zero when the chosen encoder is not invokable.
+- `NOX_GPU=off` forces CPU. `NOX_ENCODER=<name>` forces a specific encoder and aborts if it is not invokable.
+- The VAAPI/QSV profiles assume `/dev/dri/renderD128`. Hosts with a different render node must use `NOX_ENCODER` or edit `src/gpu.py`.
 
 ## License
 

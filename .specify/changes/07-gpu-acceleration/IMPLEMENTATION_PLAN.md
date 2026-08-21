@@ -42,7 +42,7 @@ The design decision that makes probe selection self-healing: selection is not "f
 - **Commit message**: `feat: add --check-gpu capability report`
 - Completed 2026-06-01 by /skill:vox build.
 
-### CP-3: Container runner passthrough and docs
+### CP-3: Container runner passthrough and docs ✅
 
 - **Touches**: `render.sh`, `tests/verify.sh`, `README.md`
 - **Tasks**:
@@ -51,6 +51,7 @@ The design decision that makes probe selection self-healing: selection is not "f
   3. Document the three GPU setups in README (nvidia runtime, VAAPI device, QSV device) plus the `NOX_GPU` / `NOX_ENCODER` overrides and the renderD128 path assumption.
 - **Verification**: `NOX_DRY_RUN=1 ./render.sh tests/fixtures/synthetic_project --gpu vaapi` prints a podman command containing `--device /dev/dri/renderD128`; `tests/verify.sh` exits 0 (ALL GATES PASSED).
 - **Commit message**: `feat: GPU passthrough flags in render.sh and docs`
+- Completed 2026-06-01 by /skill:vox build.
 
 ## Risks & Open Questions
 
