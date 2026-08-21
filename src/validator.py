@@ -96,10 +96,16 @@ def _asset_violations(segments, project_dir):
     return violations
 
 
-def validate(segments, project_dir):
+def validate(segments, project_dir, config=None):
     """Return every Violation in the cutlist, or an empty list when valid."""
     assert isinstance(segments, list), "cutlist must be a JSON array"
     schema_violations = _schema_violations(segments, _load_schema())
     if schema_violations:
         return schema_violations
-    return _timeline_violations(segments) + _asset_violations(segments, project_dir)
+    violations = _timeline_violations(segments) + _asset_violations(segments, project_dir)
+    if config is not None:
+        lut = config.get("lut")
+        if lut and not os.path.exists(os.path.join(project_dir, lut)):
+            violations.append(Violation(
+                "lut_missing", f"LUT file not found: {lut}"))
+    return violations

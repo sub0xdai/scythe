@@ -1,0 +1,10 @@
+{
+  "font": "LiberationSans-Bold",
+  "font_size": 64,
+  "stroke_width": 3,
+  "default_filter": "grayscale",
+  "default_effect": "ken_burns_slow",
+  "transition_mode": "cross_dissolve",
+  "transition_duration": 0.3,
+  "ken_burns_easing": "cubic"
+}

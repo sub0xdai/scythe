@@ -35,6 +35,7 @@ from src.gpu import (
     probe,
     profile_for,
 )
+from src.themes import ThemeError, load_theme
 from src.validator import validate
 
 
@@ -56,6 +57,13 @@ DEFAULTS = {
     "text_box_width": 0.8,
     "safe_zone_top": 0.12,
     "safe_zone_bottom": 0.25,
+    "theme": None,
+    "lut": None,
+    "default_filter": None,
+    "default_effect": None,
+    "transition_mode": "hard_cut",
+    "transition_duration": 0.5,
+    "ken_burns_easing": "linear",
 }
 
 # Presets for common formats
@@ -69,21 +77,30 @@ PRESETS = {
 
 
 def load_config(project_dir, cli_overrides=None):
-    """Merge defaults ← config.json ← CLI overrides. Returns resolved config dict."""
+    """Merge DEFAULTS <- theme <- config.json <- CLI overrides."""
     config = dict(DEFAULTS)
 
-    # Load project config.json if present
     config_path = os.path.join(project_dir, "config.json")
+    project_config = {}
     if os.path.exists(config_path):
         with open(config_path) as f:
             project_config = json.load(f)
 
-        # Apply preset if specified
-        preset_name = project_config.pop("preset", None)
-        if preset_name and preset_name in PRESETS:
-            config.update(PRESETS[preset_name])
+    # Theme layer: explicit project config beats theme defaults
+    theme_ref = project_config.get("theme")
+    if theme_ref:
+        try:
+            config.update(load_theme(theme_ref, base_dir=project_dir))
+        except ThemeError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
 
-        config.update(project_config)
+    # Apply preset if specified
+    preset_name = project_config.pop("preset", None)
+    if preset_name and preset_name in PRESETS:
+        config.update(PRESETS[preset_name])
+
+    config.update(project_config)
 
     # CLI overrides take highest priority
     if cli_overrides:
@@ -232,7 +249,7 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
     with open(cutlist_path) as f:
         segments = json.load(f)
 
-    violations = validate(segments, project_dir)
+    violations = validate(segments, project_dir, config)
     if violations:
         print("Cutlist validation failed:")
         for v in violations:

@@ -12,6 +12,7 @@ A theme MUST be a JSON file with a defined schema covering: font stack, palette,
 - WHEN the render runs
 - THEN the graph uses the theme palette, font, text style, and default filters
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Invalid theme aborts
 
 - GIVEN a theme file containing an unknown field
@@ -22,6 +23,7 @@ A theme MUST be a JSON file with a defined schema covering: font stack, palette,
 
 The repo MUST ship at least four themes: `brutalist` (behavior parity with current defaults), `clean_editorial`, `documentary`, and `minimalist`. The brutalist theme with no explicit per-segment overrides MUST produce the same filter chain as the current engine for the same cutlist.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Brutalist parity
 
 - GIVEN the fixture cutlist with theme brutalist and no per-segment overrides
@@ -32,12 +34,14 @@ The repo MUST ship at least four themes: `brutalist` (behavior parity with curre
 
 config.json MUST accept a `lut` field pointing at a `.cube` or `.3dl` file. The graph MUST insert a lut3d node when a LUT is set. The LUT applies after the segment filters and before encoding.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: LUT in graph
 
 - GIVEN config.json with `lut: "grade/teal.cube"`
 - WHEN the graph compiles
 - THEN the `filter_complex` string contains a lut3d node referencing the file
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Missing LUT file aborts
 
 - GIVEN config.json with a `lut` path that does not exist
@@ -48,6 +52,7 @@ config.json MUST accept a `lut` field pointing at a `.cube` or `.3dl` file. The 
 
 The theme MUST define a transition model supporting at least: hard cut (default), cross-dissolve (xfade), dip to black, dip to white, and luma wipe. Ken Burns easing MUST support linear, cubic, and bezier curves. After transition insertion the timeline MUST be re-checked for continuity so the no-gap rule holds.
 
+<!-- vox:covered CP-1 -->
 #### Scenario: Cross-dissolve
 
 - GIVEN a cutlist with a cross-dissolve transition between two segments
@@ -75,3 +80,4 @@ New filters and effects defined by themes MUST register in `schemas/filter-effec
 - GIVEN a cutlist using a filter not present in the matrix
 - WHEN validation runs
 - THEN it aborts naming the unknown filter
+<!-- vox:covered CP-1 -->

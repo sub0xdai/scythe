@@ -1,0 +1,9 @@
+{
+  "font": "LiberationSerif",
+  "font_size": 80,
+  "lufs_target": -16,
+  "transition_mode": "cross_dissolve",
+  "transition_duration": 0.5,
+  "ken_burns_easing": "cubic",
+  "safe_zone_bottom": 0.2
+}

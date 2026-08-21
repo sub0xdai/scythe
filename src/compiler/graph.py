@@ -167,6 +167,11 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
         if asset is None or seg.get("filter") == "white_flash":
             chain = _segment_chain(None, seg, width, height, fps)
         else:
+            # theme defaults apply to asset segments lacking explicit values
+            if seg.get("filter") is None and config.get("default_filter"):
+                seg = dict(seg, filter=config["default_filter"])
+            if seg.get("effect") is None and config.get("default_effect"):
+                seg = dict(seg, effect=config["default_effect"])
             index = asset_index[os.path.join(project_dir, seg["asset"])]
             label = split_labels[index][ref_counter.get(index, 0)]
             ref_counter[index] = ref_counter.get(index, 0) + 1
@@ -176,12 +181,16 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
     seg_labels = "".join(f"[seg{i}]" for i in range(len(segments)))
     chains.append(f"{seg_labels}concat=n={len(segments)}:v=1:a=0[vcat]")
     chains.append(f"[vcat]fps={fps},trim=duration={_fmt(duration)},setpts=PTS-STARTPTS[vfps]")
+    current = "[vfps]"
+    lut = config.get("lut")
+    if lut:
+        lut_path = os.path.join(project_dir, lut)
+        chains.append(f"[vfps]lut3d=file={lut_path}:interp=tetrahedral[vlut]")
+        current = "[vlut]"
 
     if ass_path:
-        chains.append(f"[vfps]subtitles=filename={ass_path}[vsub]")
+        chains.append(f"{current}subtitles=filename={ass_path}[vsub]")
         current = "[vsub]"
-    else:
-        current = "[vfps]"
 
     if profile is not None and profile.hw_chain:
         chains.append(f"{current}{profile.hw_chain}[vout]")

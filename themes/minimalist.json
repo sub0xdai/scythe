@@ -1,0 +1,9 @@
+{
+  "font": "LiberationSans",
+  "font_size": 56,
+  "stroke_width": 2,
+  "text_color": "#FFFFFF",
+  "default_filter": "color_crush",
+  "transition_mode": "hard_cut",
+  "ken_burns_easing": "linear"
+}
