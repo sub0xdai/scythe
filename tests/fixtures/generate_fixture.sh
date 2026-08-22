@@ -9,12 +9,12 @@ FIXTURE="$(cd "$(dirname "$0")" && pwd)/synthetic_project"
 
 mkdir -p "$FIXTURE/raw_footage" "$FIXTURE/audio" "$FIXTURE/overlays"
 
-# 2s test video, 360x640 @ 15fps
-ffmpeg -y -f lavfi -i "testsrc2=size=360x640:rate=15:duration=2" \
+# 2s test video, 640x360 @ 15fps (landscape)
+ffmpeg -y -f lavfi -i "testsrc2=size=640x360:rate=15:duration=2" \
     -pix_fmt yuv420p "$FIXTURE/raw_footage/clip.mp4" 2>/dev/null
 
 # Single-frame gray image
-ffmpeg -y -f lavfi -i "color=c=0x606060:size=360x640:duration=1" \
+ffmpeg -y -f lavfi -i "color=c=0x606060:size=640x360:duration=1" \
     -frames:v 1 "$FIXTURE/raw_footage/photo.png" 2>/dev/null
 
 # 4s soundtrack and voiceover (names trigger the ducking path)

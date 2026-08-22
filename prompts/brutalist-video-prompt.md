@@ -9,7 +9,7 @@ You are an expert programmatic video editor. Generate a precise, frame-by-frame 
 ## Output Video Specs
 
 - Duration: 15-30 seconds
-- Aspect ratio: 9:16 vertical (1080×1920) — or specify your target
+- Aspect ratio: 16:9 widescreen (1920×1080) — or specify your target
 - Two-phase structure synchronized to a high-BPM soundtrack
 
 ### Phase 1: The Hook (0:00 - 0:05)

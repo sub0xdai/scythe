@@ -21,12 +21,20 @@ class AudioSpec:
 
 
 @dataclass(frozen=True)
+class VideoOutput:
+    """One encoded output: filtergraph label, filename stem, quality knob."""
+    name: str
+    label: str
+    crf: int = 23
+
+
+@dataclass(frozen=True)
 class CompiledGraph:
-    """One ffmpeg invocation: per-input arg lists, the filtergraph, maps."""
+    """One ffmpeg invocation: per-input arg lists, the filtergraph, outputs."""
     input_args: list[list[str]]
     filter_complex: str
-    video_map: str
-    audio_map: str | None
+    outputs: list[VideoOutput]
+    audio_maps: list[str] | None
     duration: float
 
 
@@ -68,11 +76,22 @@ def _segment_chain(label, seg, width, height, fps, easing="linear"):
     return label + ",".join(parts)
 
 
-def _audio_chains(audio, duration, config, audio_input_index, inputs):
-    """Register audio inputs and return (chains, audio_map).
+def _audio_maps(n_outputs, chains):
+    """Append an asplit when several outputs share the mix; return labels."""
+    if n_outputs <= 1:
+        return ["[aout]"]
+    labels = "".join(f"[aout{k}]" for k in range(n_outputs))
+    chains.append(f"[aout]asplit={n_outputs}{labels}")
+    return [f"[aout{k}]" for k in range(n_outputs)]
+
+
+def _audio_chains(audio, duration, config, audio_input_index, inputs,
+                  n_outputs=1):
+    """Register audio inputs and return (chains, audio_maps).
 
     Chain: voice cleanup -> sidechain ducking on the soundtrack ->
-    amix -> loudnorm to the configured LUFS target.
+    amix -> loudnorm to the configured LUFS target. One label per
+    output; asplit fans the mastered mix out when n_outputs > 1.
     """
     if audio is None or (audio.soundtrack is None and audio.voiceover is None):
         return [], None
@@ -108,11 +127,12 @@ def _audio_chains(audio, duration, config, audio_input_index, inputs):
             f":ratio={_fmt(ratio)}:attack=20:release=500:makeup=1[st_ducked]")
         chains.append("[st_ducked][vo_mix]amix=inputs=2:normalize=0:duration=first[aout_raw]")
         chains.append(f"[aout_raw]{loudnorm}[aout]")
-        return chains, "[aout]"
+        return chains, _audio_maps(n_outputs, chains)
 
     label = st_label or vo_label
-    return [f"{label}{trim},asetpts=PTS-STARTPTS[aout_raw]",
-            f"[aout_raw]{loudnorm}[aout]"], "[aout]"
+    chains = [f"{label}{trim},asetpts=PTS-STARTPTS[aout_raw]",
+              f"[aout_raw]{loudnorm}[aout]"]
+    return chains, _audio_maps(n_outputs, chains)
 
 
 XFADE_MODES = {
@@ -127,6 +147,78 @@ def _xfade_mode(mode):
     if mode not in XFADE_MODES:
         raise ValueError(f"unknown transition_mode: {mode}")
     return XFADE_MODES[mode]
+
+
+def _target_scale(output, width, height):
+    """Return the scale filter string for an output, or None for identity."""
+    if "max_height" in output:
+        max_h = output["max_height"]
+        if height <= max_h:
+            return None
+        w = round(width * max_h / height / 2) * 2
+        return f"scale={w}:{max_h}"
+    if "resolution" in output:
+        tw, th = output["resolution"]
+        if (tw, th) == (width, height):
+            return None
+        return f"scale={tw}:{th}"
+    return None
+
+
+def _output_chains(current, outputs_cfg, width, height, profile, chains):
+    """Append per-output tails; return the VideoOutput list for mapping.
+
+    No outputs configured -> the legacy single-output graph, byte-identical
+    to the pre-multi-format behavior. Otherwise a split node fans the final
+    frames into N tails; scale runs on CPU frames, so it precedes any
+    hardware upload (hw_chain).
+    """
+    cfg = outputs_cfg or []
+    if not cfg:
+        if profile is not None and profile.hw_chain:
+            chains.append(f"{current}{profile.hw_chain}[vout]")
+            return [VideoOutput("render", "[vout]", 23)]
+        return [VideoOutput("render", current, 23)]
+
+    names = [o.get("name") for o in cfg]
+    if any(not isinstance(n, str) or not n for n in names):
+        raise ValueError("each output needs a non-empty 'name'")
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        raise ValueError(f"duplicate output names: {dupes}")
+    scales = [_target_scale(o, width, height) for o in cfg]
+
+    if len(cfg) == 1 and scales[0] is None:
+        name, crf = cfg[0]["name"], cfg[0].get("crf", 23)
+        if profile is not None and profile.hw_chain:
+            chains.append(f"{current}{profile.hw_chain}[vout]")
+            return [VideoOutput(name, "[vout]", crf)]
+        return [VideoOutput(name, current, crf)]
+
+    hw = profile.hw_chain if profile is not None else ""
+    outputs = []
+    if len(cfg) > 1:
+        split_labels = "".join(f"[o{k}]" for k in range(len(cfg)))
+        chains.append(f"{current}split={len(cfg)}{split_labels}")
+        for k, (o, scale) in enumerate(zip(cfg, scales)):
+            tail = f"{scale},setsar=1" if scale else ""
+            if hw:
+                tail = f"{tail}{',' if tail else ''}{hw}"
+            label = f"[o{k}]"
+            if tail:
+                label = f"[fo{k}]"
+                chains.append(f"[o{k}]{tail}[fo{k}]")
+            outputs.append(VideoOutput(o["name"], label, o.get("crf", 23)))
+    else:
+        o, scale = cfg[0], scales[0]
+        tail = f"{scale},setsar=1" if scale else ""
+        if hw:
+            tail = f"{tail}{',' if tail else ''}{hw}"
+        label = current if not tail else "[fo0]"
+        if tail:
+            chains.append(f"{current}{tail}[fo0]")
+        outputs.append(VideoOutput(o["name"], label, o.get("crf", 23)))
+    return outputs
 
 
 def _transition_chains(segments, mode, duration_s, width, height, fps):
@@ -252,12 +344,11 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
         chains.append(f"{current}subtitles=filename={ass_path}[vsub]")
         current = "[vsub]"
 
-    if profile is not None and profile.hw_chain:
-        chains.append(f"{current}{profile.hw_chain}[vout]")
-        current = "[vout]"
+    outputs = _output_chains(current, config.get("outputs"), width, height,
+                             profile, chains)
 
-    audio_chains, audio_map = _audio_chains(
-        audio, duration, config, len(inputs), inputs)
+    audio_chains, audio_maps = _audio_chains(
+        audio, duration, config, len(inputs), inputs, len(outputs))
     chains.extend(audio_chains)
 
-    return CompiledGraph(inputs, ";".join(chains), current, audio_map, duration)
+    return CompiledGraph(inputs, ";".join(chains), outputs, audio_maps, duration)

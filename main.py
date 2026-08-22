@@ -17,7 +17,7 @@ Project directory structure:
   ├── prompts/         # cutlist.json (generated via LLM prompt)
   ├── raw_footage/     # Video clips + images
   ├── overlays/        # Logos, textures, grids, grain
-  └── output/          # Rendered .mp4
+  └── output/          # master.mp4 + web.mp4 (+ subtitles.ass)
 """
 
 import argparse
@@ -67,7 +67,7 @@ def _progress_sink(event):
               file=sys.stderr)
 
 
-def _run_render(cmd, duration, output_path):
+def _run_render(cmd, duration, output_paths):
     """Run ffmpeg with -progress pipe:1, streaming telemetry events."""
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -80,13 +80,13 @@ def _run_render(cmd, duration, output_path):
         _fail(f"FFmpeg failed:\n{stderr[-4000:]}", code=proc.returncode)
     if MACHINE:
         _json_event({"type": "done"})
-    log(f"Done → {output_path}")
+    log(f"Done → {', '.join(output_paths)}")
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────
 
 DEFAULTS = {
-    "resolution": [1080, 1920],   # width, height (9:16 vertical)
+    "resolution": [1920, 1080],   # width, height (16:9 desktop default)
     "fps": 30,
     "font": "LiberationSerif-Bold",
     "font_size": 72,
@@ -108,6 +108,10 @@ DEFAULTS = {
     "transition_mode": "hard_cut",
     "transition_duration": 0.5,
     "ken_burns_easing": "linear",
+    "outputs": [
+        {"name": "master", "crf": 18},
+        {"name": "web", "max_height": 720, "crf": 23},
+    ],
 }
 
 # Presets for common formats
@@ -304,11 +308,10 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
 
     output_dir = os.path.join(project_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, "render.mp4")
 
     log(f"Project:  {project_dir}")
     log(f"Config:   {target_size[0]}×{target_size[1]} @ {config['fps']}fps | {config['font']} {config['font_size']}px")
-    log(f"Output:   {output_path}")
+    log(f"Outputs:  {', '.join(o['name'] + '.mp4' for o in config['outputs'])}")
     log(f"Segments: {len(segments)}")
     log("─" * 50)
 
@@ -336,20 +339,23 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
     cmd = ["ffmpeg", "-y", *profile.extra_args]
     for arg_list in graph.input_args:
         cmd.extend(arg_list)
-    cmd += ["-filter_complex", graph.filter_complex,
-            "-map", graph.video_map]
-    if graph.audio_map:
-        cmd += ["-map", graph.audio_map]
-    cmd += ["-c:v", profile.encoder, "-preset", "medium", "-crf", "23",
-            "-threads", "4", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
-    if graph.audio_map:
-        cmd += ["-c:a", "aac"]
-    cmd += ["-progress", "pipe:1"]
-    cmd.append(output_path)
+    cmd += ["-filter_complex", graph.filter_complex]
+    output_paths = []
+    for i, out in enumerate(graph.outputs):
+        out_path = os.path.join(output_dir, f"{out.name}.mp4")
+        output_paths.append(out_path)
+        cmd += ["-map", out.label, "-c:v", profile.encoder, "-preset", "medium",
+                "-crf", str(out.crf), "-threads", "4", "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart"]
+        if graph.audio_maps:
+            cmd += ["-map", graph.audio_maps[i], "-c:a", "aac"]
+        if i == len(graph.outputs) - 1:
+            cmd += ["-progress", "pipe:1"]
+        cmd.append(out_path)
 
-    log(f"Rendering {output_path} ({duration:.1f}s)...")
+    log(f"Rendering {duration:.1f}s → {', '.join(output_paths)}...")
     log("Running: " + " ".join(cmd))
-    _run_render(cmd, duration, output_path)
+    _run_render(cmd, duration, output_paths)
 
 
 # ── Beat-Detect Mode (legacy) ─────────────────────────────────────────────

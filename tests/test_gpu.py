@@ -118,7 +118,7 @@ class CompilerProfileTests(unittest.TestCase):
     def test_nvenc_profile_adds_hw_chain(self):
         graph = compile_graph(CONFIG, SEGMENTS, AUDIO, ".", PROFILE_TABLE["h264_nvenc"])
         self.assertIn("format=nv12,hwupload_cuda", graph.filter_complex)
-        self.assertEqual(graph.video_map, "[vout]")
+        self.assertEqual(graph.outputs[0].label, "[vout]")
 
     def test_hw_chain_appended_after_text(self):
         graph = compile_graph(CONFIG, SEGMENTS, AUDIO, ".",

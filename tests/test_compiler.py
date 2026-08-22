@@ -83,7 +83,7 @@ class GraphStructureTests(unittest.TestCase):
 
     def test_audio_absent_when_none(self):
         graph = _graph(audio=None)
-        self.assertIsNone(graph.audio_map)
+        self.assertIsNone(graph.audio_maps)
         self.assertNotIn("amix", graph.filter_complex)
 
     def test_concat_count(self):
@@ -108,8 +108,8 @@ class GraphStructureTests(unittest.TestCase):
 
     def test_video_map_label(self):
         graph = _graph()
-        self.assertTrue(graph.video_map.startswith("["))
-        self.assertTrue(graph.video_map.endswith("]"))
+        self.assertTrue(graph.outputs[0].label.startswith("["))
+        self.assertTrue(graph.outputs[0].label.endswith("]"))
 
     def test_duration_from_cutlist(self):
         graph = _graph()

@@ -19,7 +19,7 @@ THEME_KEYS = {
     "text_box_width", "safe_zone_top", "safe_zone_bottom",
     # theming-only
     "lut", "transition_mode", "transition_duration", "ken_burns_easing",
-    "default_filter", "default_effect",
+    "default_filter", "default_effect", "outputs",
 }
 
 

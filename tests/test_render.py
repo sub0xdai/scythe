@@ -17,7 +17,7 @@ from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = "tests/fixtures/synthetic_project"
-OUTPUT = REPO_ROOT / FIXTURE / "output" / "render.mp4"
+OUTPUT = REPO_ROOT / FIXTURE / "output" / "master.mp4"
 
 
 def _render():
@@ -68,7 +68,7 @@ class RenderContractTests(unittest.TestCase):
         data = json.loads(probe.stdout)
         video = next(s for s in data["streams"] if s["codec_type"] == "video")
         audio = next(s for s in data["streams"] if s["codec_type"] == "audio")
-        self.assertEqual((video["width"], video["height"]), (360, 640))
+        self.assertEqual((video["width"], video["height"]), (640, 360))
         self.assertEqual(video["codec_name"], "h264")
         self.assertEqual(video["r_frame_rate"], "15/1")
         self.assertEqual(audio["codec_name"], "aac")
@@ -144,7 +144,7 @@ class TextBurnE2ETests(unittest.TestCase):
                 self.assertIn(style, content)
             self.assertIn("\\k", content)
             self.assertIn("\\fad(150,150)", content)
-            render = out / "render.mp4"
+            render = out / "master.mp4"
             dark = self._dark_pixel_count(render, 0.5)
             self.assertGreater(dark, 0, "no dark pixels at a text timestamp")
 
@@ -165,7 +165,7 @@ class TextBurnE2ETests(unittest.TestCase):
                 cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300,
             )
             self.assertEqual(result.returncode, 0, result.stderr[-2000:])
-            render = Path(tmp, "output", "render.mp4")
+            render = Path(tmp, "output", "master.mp4")
             dark = self._dark_pixel_count(render, 0.5)
             self.assertEqual(dark, 0, "textless white render has dark pixels")
 

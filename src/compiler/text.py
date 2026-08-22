@@ -51,8 +51,8 @@ def build_ass(segments, config):
     box_width = config.get("text_box_width", 0.8)
     safe_top = config.get("safe_zone_top", 0.12)
     safe_bottom = config.get("safe_zone_bottom", 0.25)
-    # ponytail: horizontal safe zones are internal constants; the primary
-    # orientation is 9:16 vertical.
+    # ponytail: horizontal safe zones are internal constants; landscape
+    # (16:9 desktop) is the default, vertical opt-in presets tighten them.
     if width > height:
         safe_top, safe_bottom = 0.08, 0.15
 

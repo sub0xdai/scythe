@@ -232,7 +232,7 @@ class TransitionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr[-2000:])
             probe = subprocess.run(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "csv=p=0", str(Path(tmp, "output", "render.mp4"))],
+                 "-of", "csv=p=0", str(Path(tmp, "output", "master.mp4"))],
                 capture_output=True, text=True, check=True,
             )
             self.assertAlmostEqual(float(probe.stdout.strip()), 3.7, delta=0.1)

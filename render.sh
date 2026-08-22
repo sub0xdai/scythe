@@ -74,4 +74,4 @@ echo "=== Rendering: $PROJECT ==="
 podman run --rm "${GPU_ARGS[@]}" -v "$(pwd):/app:Z" scythe --project "$PROJECT" "${EXTRA_ARGS[@]}"
 
 echo ""
-echo "Done → $(pwd)/$PROJECT/output/render.mp4"
+echo "Done → $(pwd)/$PROJECT/output/ (master.mp4 + web.mp4)"

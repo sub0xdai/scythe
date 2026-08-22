@@ -113,7 +113,7 @@ class _AudioProjectMixin:
             cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300,
         )
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
-        return Path(tmp, "output", "render.mp4")
+        return Path(tmp, "output", "master.mp4")
 
 
 def _mean_volume(media, start, duration):

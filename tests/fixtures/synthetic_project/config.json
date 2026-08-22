@@ -1,5 +1,5 @@
 {
-  "resolution": [360, 640],
+  "resolution": [640, 360],
   "fps": 15,
   "font": "LiberationSerif-Bold",
   "font_size": 28,
