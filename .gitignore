@@ -21,3 +21,4 @@ tests/fixtures/*/output/
 
 # Vox build specs - local only, not published
 .specify/
+scythe-test/
