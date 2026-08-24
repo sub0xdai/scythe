@@ -1,7 +1,10 @@
 FROM python:3.11-slim
 
+# ffmpeg is pinned to the tested 7.1 line: filter option names changed in 7.x
+# (noise seed -> all_seed). If the base image ever moves to a newer line, this
+# fails the build loudly instead of drifting silently.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
+    ffmpeg=7:7.1.* \
     imagemagick \
     fonts-liberation \
     curl \

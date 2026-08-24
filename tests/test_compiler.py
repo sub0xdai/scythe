@@ -55,7 +55,7 @@ class GraphStructureTests(unittest.TestCase):
                      "text": None, "asset": "raw_footage/clip.mp4",
                      "filter": "film_grain", "effect": None}]
         graph = compile_graph(CONFIG, segments, None)
-        self.assertIn("noise=alls=4:allf=t:seed=1234", graph.filter_complex)
+        self.assertIn("noise=alls=4:allf=t:all_seed=1234", graph.filter_complex)
 
     def test_white_flash_color_segment(self):
         graph = _graph()

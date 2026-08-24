@@ -67,8 +67,17 @@ def _progress_sink(event):
               file=sys.stderr)
 
 
+def _tmp_path(out_path):
+    """Temp sibling ending in .mp4 so ffmpeg can infer the output format."""
+    return out_path[:-4] + ".tmp.mp4"
+
+
 def _run_render(cmd, duration, output_paths):
-    """Run ffmpeg with -progress pipe:1, streaming telemetry events."""
+    """Run ffmpeg with -progress pipe:1, streaming telemetry events.
+
+    Outputs are written to <name>.tmp.mp4 and atomically renamed on success,
+    so a killed render never leaves a half-written final file.
+    """
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     parser = ProgressParser(duration, emit=_progress_sink)
@@ -78,6 +87,8 @@ def _run_render(cmd, duration, output_paths):
     proc.wait()
     if proc.returncode != 0:
         _fail(f"FFmpeg failed:\n{stderr[-4000:]}", code=proc.returncode)
+    for out_path in output_paths:
+        os.replace(_tmp_path(out_path), out_path)
     if MACHINE:
         _json_event({"type": "done"})
     log(f"Done → {', '.join(output_paths)}")
@@ -159,7 +170,14 @@ def load_config(project_dir, cli_overrides=None):
 
 # ── Audio ─────────────────────────────────────────────────────────────────
 
-AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".m4a"}
+def _has_audio_stream(path):
+    """True when ffprobe finds an audio stream (content, not extension)."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=codec_type", "-of", "csv=p=0", path],
+        capture_output=True, text=True, timeout=30,
+    )
+    return "audio" in result.stdout
 
 
 def _detect_audio(project_dir):
@@ -170,7 +188,8 @@ def _detect_audio(project_dir):
         return None
 
     files = sorted(os.listdir(audio_dir))
-    audio_files = [f for f in files if os.path.splitext(f)[1].lower() in AUDIO_EXTS]
+    audio_files = [f for f in files
+                   if _has_audio_stream(os.path.join(audio_dir, f))]
 
     if not audio_files:
         log(f"  WARNING: no audio files in {audio_dir}, output will be silent")
@@ -351,7 +370,7 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
             cmd += ["-map", graph.audio_maps[i], "-c:a", "aac"]
         if i == len(graph.outputs) - 1:
             cmd += ["-progress", "pipe:1"]
-        cmd.append(out_path)
+        cmd.append(_tmp_path(out_path))  # atomic rename to final name on success
 
     log(f"Rendering {duration:.1f}s → {', '.join(output_paths)}...")
     log("Running: " + " ".join(cmd))

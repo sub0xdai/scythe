@@ -27,7 +27,8 @@ def filter_chain(filter_name):
     if filter_name == "chromatic_aberration":
         return "rgbashift=rh=2:bh=-2"
     if filter_name == "film_grain":
-        return f"noise=alls=4:allf=t:seed={NOISE_SEED}"
+        # ffmpeg >= 7 renamed seed -> all_seed (alls/allf kept as aliases).
+        return f"noise=alls=4:allf=t:all_seed={NOISE_SEED}"
     if filter_name == "white_flash":
         return ""  # generated color segment, handled in graph.py
     raise ValueError(f"unknown filter: {filter_name}")

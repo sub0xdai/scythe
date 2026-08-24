@@ -221,7 +221,7 @@ Renders auto-detect hardware encoders with a dry-run check (0.2s null encode). N
 
 ## Dependencies
 
-- **System**: `ffmpeg`, `wget`, `yt-dlp` (pacman / apt / brew)
+- **System**: `ffmpeg` >= 7, `wget`, `yt-dlp` (pacman / apt / brew)
 - **Container**: Podman or Docker
 - **Container provides**: Python 3.11, ffmpeg, jsonschema
 
