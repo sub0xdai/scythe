@@ -87,6 +87,14 @@ class AssetRuleTests(unittest.TestCase):
         self.assertEqual(violations[0].rule, "asset_missing")
         self.assertIn("ghost.mp4", violations[0].message)
 
+    def test_missing_overlay_asset_flagged(self):
+        segments = [{"start": 0.0, "end": 1.0, "phase": "hook",
+                     "asset": None, "filter": "grayscale",
+                     "overlays": [{"asset": "overlays/ghost.png"}]}]
+        violations = validate(segments, self.tmp.name)
+        self.assertEqual(violations[0].rule, "asset_missing")
+        self.assertIn("ghost.png", violations[0].message)
+
     def test_zero_byte_flagged(self):
         empty = Path(self.tmp.name, "raw_footage", "empty.mp4")
         empty.parent.mkdir(parents=True)

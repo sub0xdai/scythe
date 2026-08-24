@@ -76,6 +76,24 @@
           "subtitle": { "type": "string" }
         },
         "required": ["title", "subtitle"]
+      },
+      "overlays": {
+        "type": "array",
+        "default": [],
+        "description": "Alpha layers composited over this segment: logos, scanlines, rain, skulls. Each is an input with optional position, drift, and opacity.",
+        "items": {
+          "type": "object",
+          "required": ["asset"],
+          "additionalProperties": false,
+          "properties": {
+            "asset": { "type": "string", "description": "Relative path to overlay media (RGBA image or video with alpha)." },
+            "x": { "type": "number", "default": 0, "description": "Horizontal position in px from the left edge." },
+            "y": { "type": "number", "default": 0, "description": "Vertical position in px from the top edge." },
+            "dx": { "type": "number", "default": 0, "description": "Horizontal drift in px/sec." },
+            "dy": { "type": "number", "default": 0, "description": "Vertical drift in px/sec." },
+            "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Opacity 0..1." }
+          }
+        }
       }
     }
   },

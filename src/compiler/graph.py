@@ -7,7 +7,7 @@ Pure functions: no ffmpeg execution, no file writes. The renderer
 import os
 from dataclasses import dataclass
 
-from src.compiler.video import filter_chain, zoompan_chain
+from src.compiler.video import filter_chain, ken_burns_chain
 
 VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".avi"}
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
@@ -42,6 +42,13 @@ def _fmt(value):
     return f"{value:g}"
 
 
+def _drift_expr(pos, drift):
+    """Overlay position: base px plus optional px/sec drift over t."""
+    if drift:
+        return f"{_fmt(pos)}+{_fmt(drift)}*t" if pos else f"{_fmt(drift)}*t"
+    return _fmt(pos)
+
+
 def _segment_chain(label, seg, width, height, fps, easing="linear"):
     start = seg["start"]
     duration = seg["end"] - start
@@ -68,9 +75,9 @@ def _segment_chain(label, seg, width, height, fps, easing="linear"):
     filters = filter_chain(filter_name)
     if filters:
         parts.append(filters)
-    zoompan = zoompan_chain(effect_name, width, height, fps, frame_count, easing)
-    if zoompan:
-        parts.append(zoompan)
+    motion = ken_burns_chain(effect_name, width, height, fps, frame_count, easing)
+    if motion:
+        parts.append(motion)
     parts.append("setsar=1")
     parts.append("format=yuv420p")
     return label + ",".join(parts)
@@ -294,6 +301,24 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
         asset_index[full_asset] = index
         segment_refs[index] = 1
 
+    # Overlay assets (alpha layers, logos, rain) are additional inputs.
+    overlay_index = {}
+    overlay_refs = {}
+    for seg in segments:
+        for ov in seg.get("overlays", []):
+            full_asset = os.path.join(project_dir, ov["asset"])
+            if full_asset in overlay_index:
+                overlay_refs[overlay_index[full_asset]] += 1
+                continue
+            index = len(inputs)
+            ext = os.path.splitext(ov["asset"])[1].lower()
+            if ext in IMAGE_EXTS:
+                inputs.append(["-loop", "1", "-framerate", str(fps), "-i", full_asset])
+            else:
+                inputs.append(["-i", full_asset])
+            overlay_index[full_asset] = index
+            overlay_refs[index] = 1
+
     chains = []
     split_labels = {}
     for index, count in segment_refs.items():
@@ -304,7 +329,17 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
         else:
             split_labels[index] = [f"[{index}:v]"]
 
+    overlay_split_labels = {}
+    for index, count in overlay_refs.items():
+        if count > 1:
+            labels = "".join(f"[ov{index}_{k}]" for k in range(count))
+            chains.append(f"[{index}:v]split={count}{labels}")
+            overlay_split_labels[index] = [f"[ov{index}_{k}]" for k in range(count)]
+        else:
+            overlay_split_labels[index] = [f"[{index}:v]"]
+
     ref_counter = {}
+    overlay_counter = {}
     easing = config.get("ken_burns_easing", "linear")
     for i, seg in enumerate(segments):
         asset = seg.get("asset")
@@ -321,6 +356,18 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
             ref_counter[index] = ref_counter.get(index, 0) + 1
             chain = _segment_chain(label, seg, width, height, fps, easing)
         chains.append(f"{chain}[seg{i}]")
+        for j, ov in enumerate(seg.get("overlays", [])):
+            ov_index = overlay_index[os.path.join(project_dir, ov["asset"])]
+            ov_src = overlay_split_labels[ov_index][overlay_counter.get(ov_index, 0)]
+            overlay_counter[ov_index] = overlay_counter.get(ov_index, 0) + 1
+            opacity = ov.get("opacity", 1.0)
+            if opacity < 1.0:
+                prep_label = f"[ovp{i}_{j}]"
+                chains.append(f"{ov_src}format=rgba,colorchannelmixer=aa={_fmt(opacity)}{prep_label}")
+                ov_src = prep_label
+            xexpr = _drift_expr(ov.get("x", 0), ov.get("dx", 0))
+            yexpr = _drift_expr(ov.get("y", 0), ov.get("dy", 0))
+            chains.append(f"[seg{i}]{ov_src}overlay=x='{xexpr}':y='{yexpr}'[seg{i}]")
 
     transition_mode = config.get("transition_mode", "hard_cut")
     if transition_mode != "hard_cut" and len(segments) > 1:

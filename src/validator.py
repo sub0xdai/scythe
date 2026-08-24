@@ -81,18 +81,23 @@ def _probes_as_media(path):
 
 def _asset_violations(segments, project_dir):
     violations = []
-    for i, seg in enumerate(segments):
-        asset = seg.get("asset")
-        if asset is None:
-            continue
+
+    def check(asset, i, label):
         full_path = os.path.join(project_dir, asset)
         if not os.path.exists(full_path):
-            violations.append(Violation("asset_missing", f"asset not found: {asset}", i))
+            violations.append(Violation("asset_missing", f"{label} not found: {asset}", i))
         elif os.path.getsize(full_path) == 0:
-            violations.append(Violation("asset_empty", f"asset is zero bytes: {asset}", i))
+            violations.append(Violation("asset_empty", f"{label} is zero bytes: {asset}", i))
         elif not _probes_as_media(full_path):
             violations.append(Violation(
-                "asset_corrupt", f"asset does not probe as media: {asset}", i))
+                "asset_corrupt", f"{label} does not probe as media: {asset}", i))
+
+    for i, seg in enumerate(segments):
+        asset = seg.get("asset")
+        if asset is not None:
+            check(asset, i, "asset")
+        for ov in seg.get("overlays", []):
+            check(ov["asset"], i, "overlay asset")
     return violations
 
 

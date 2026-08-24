@@ -34,22 +34,27 @@ def filter_chain(filter_name):
     raise ValueError(f"unknown filter: {filter_name}")
 
 
-def zoompan_chain(effect_name, width, height, fps, frame_count, easing="linear"):
-    """Return the zoompan node for a motion effect, or "" for identity."""
+def ken_burns_chain(effect_name, width, height, fps, frame_count, easing="linear"):
+    """Return the Ken Burns node for a motion effect, or "" for identity.
+
+    scale(eval=frame)+crop replaces zoompan: zoompan uses a slow per-frame
+    resampler, while scale uses the SIMD swscale fast path. Centered zoom,
+    same eased motion as the old zoompan.
+    """
     if effect_name in (None, "strobe", "word_flash"):
         return ""
-    t = f"in/{frame_count}"
+    t = f"n/{frame_count}"
     if easing in ("cubic", "bezier"):
         eased = f"({t}*{t}*(3-2*{t}))"  # smoothstep
     else:
         eased = t
     if effect_name == "ken_burns_slow":
-        zoom = f"1+0.08*{eased}"
+        zoom = f"(1+0.08*{eased})"
     elif effect_name == "ken_burns_fast":
-        zoom = f"1+0.15*{eased}"
+        zoom = f"(1+0.15*{eased})"
     elif effect_name == "snap_zoom":
-        zoom = f"if(gt(in,{frame_count}/2),1.3,1)"
+        zoom = f"if(gt(n,{frame_count}/2),1.3,1)"
     else:
         raise ValueError(f"unknown effect: {effect_name}")
-    return ("zoompan=z='%s':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-            "d=1:fps=%d:s=%dx%d" % (zoom, fps, width, height))
+    return (f"scale=w='{width}*{zoom}':h='{height}*{zoom}':eval=frame,"
+            f"crop=w={width}:h={height}:x='(iw-{width})/2':y='(ih-{height})/2'")

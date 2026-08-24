@@ -61,15 +61,26 @@ class GraphStructureTests(unittest.TestCase):
         graph = _graph()
         self.assertIn("color=c=white", graph.filter_complex)
 
-    def test_zoompan_for_ken_burns(self):
+    def test_ken_burns_uses_scale_crop(self):
         graph = _graph()
-        self.assertIn("zoompan", graph.filter_complex)
-        self.assertIn("1+0.08*in/30", graph.filter_complex)
-        self.assertIn("1+0.15*in/14", graph.filter_complex)
+        self.assertNotIn("zoompan", graph.filter_complex)
+        self.assertIn("eval=frame", graph.filter_complex)
+        self.assertIn("1+0.08*n/30", graph.filter_complex)
+        self.assertIn("1+0.15*n/14", graph.filter_complex)
 
     def test_snap_zoom_steps_at_midpoint(self):
         graph = _graph()
-        self.assertIn("if(gt(in,15/2),1.3,1)", graph.filter_complex)
+        self.assertIn("if(gt(n,15/2),1.3,1)", graph.filter_complex)
+
+    def test_overlay_composite(self):
+        segments = [{"start": 0.0, "end": 1.0, "phase": "hook", "text": None,
+                     "asset": "raw_footage/clip.mp4", "filter": None, "effect": None,
+                     "overlays": [{"asset": "overlays/logo.png", "opacity": 0.5,
+                                   "x": 100, "dy": -100}]}]
+        graph = compile_graph(CONFIG, segments, None)
+        self.assertIn("overlay=x='100':y='-100*t'", graph.filter_complex)
+        self.assertIn("colorchannelmixer=aa=0.5", graph.filter_complex)
+        self.assertIn("-loop", graph.input_args[-1])
 
     def test_drawtext_carries_text(self):
         graph = _graph(ass_path="output/subtitles.ass")

@@ -84,6 +84,20 @@ Valid JSON array only. No conversational filler.
 | `asset` | string\|null | Relative path to source file. Null for flash frames |
 | `filter` | string\|null | `grayscale`, `color_invert`, `high_contrast_green`, `high_contrast_red`, `white_flash`, `chromatic_aberration`, `film_grain`, `color_crush` |
 | `effect` | string\|null | `ken_burns_slow`, `ken_burns_fast`, `snap_zoom`, `strobe`, `word_flash` |
+| `overlays` | array | Alpha layers composited over the segment (logos, scanlines, rain) |
+
+### Overlays
+
+A segment can composite alpha layers over the footage via `overlays`. Useful for logos, scanlines, money rain, skull rain. Each overlay:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `asset` | string | Relative path to RGBA image or video with alpha (`overlays/`) |
+| `x`, `y` | float | Base position in px (default 0) |
+| `dx`, `dy` | float | Drift in px/sec (e.g. `dy: -300` makes rain fall) |
+| `opacity` | float | 0..1 (default 1) |
+
+The overlay stays for the segment's full duration. For a sub-window, split the segment.
 
 ### Copywriting Rules
 
