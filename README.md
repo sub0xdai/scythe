@@ -207,7 +207,12 @@ The gate: fixture asset generation, the full unit suite, a fixture render with c
 
 Renders auto-detect hardware encoders with a dry-run check (0.2s null encode). No GPU access means libx264 CPU fallback, unchanged behavior.
 
+When no `--gpu` flag is given, `render.sh` auto-detects usable devices on the host and passes them to the container (additively): the NVIDIA CDI device when the NVIDIA container toolkit is present, and `/dev/dri/renderD128` when it exists. No devices found means no passthrough, and the engine falls back to libx264.
+
 ```bash
+# No flag: auto-detect (NVIDIA CDI + /dev/dri/renderD128)
+./render.sh projects/my-video
+
 # NVIDIA (requires nvidia-container-toolkit on the host)
 ./render.sh projects/my-video --gpu nvidia
 

@@ -51,9 +51,21 @@ cd "$SCRIPT_DIR"
 GPU_ARGS=()
 case "$GPU" in
     "")
+        # Auto-detect usable devices when no --gpu flag is given (additive):
+        # NVIDIA CDI device when the container toolkit is present, and the
+        # DRM render node when /dev/dri/renderD128 exists. The engine's
+        # dry-run probe inside the container remains the final arbiter -
+        # an encoder that cannot be invoked falls back to libx264.
+        if command -v nvidia-ctk >/dev/null 2>&1 || \
+           command -v nvidia-container-cli >/dev/null 2>&1; then
+            GPU_ARGS+=(--device nvidia.com/gpu=all)
+        fi
+        if [ -e /dev/dri/renderD128 ]; then
+            GPU_ARGS+=(--device /dev/dri/renderD128)
+        fi
         ;;
     nvidia)
-        GPU_ARGS=(--gpus all) ;;
+        GPU_ARGS=(--device nvidia.com/gpu=all) ;;
     vaapi|qsv)
         GPU_ARGS=(--device /dev/dri/renderD128) ;;
     *)
