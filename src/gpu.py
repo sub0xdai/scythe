@@ -76,3 +76,21 @@ def probe(encoder_list=None, dry_run_fn=None):
 def profile_for(encoder_name):
     """Resolve a forced encoder name to its profile, or None if unknown."""
     return PROFILE_TABLE.get(encoder_name)
+
+
+def quality_for(encoder, crf):
+    """Return the rate-control/quality args for an encoder given a CRF.
+
+    libx264, nvenc, qsv, and vaapi are CRF-aligned (lower is better) and take
+    the CRF unchanged. videotoolbox is inverted (higher is better on a 1-100
+    scale) and takes 100 - crf, clamped to [1, 100]. Unknown encoders raise.
+    """
+    if encoder == "libx264":
+        return ("-preset", "veryfast", "-crf", str(crf))
+    if encoder == "h264_nvenc":
+        return ("-rc", "vbr", "-cq", str(crf), "-preset", "p5")
+    if encoder in ("h264_qsv", "h264_vaapi"):
+        return ("-global_quality", str(crf))
+    if encoder == "h264_videotoolbox":
+        return ("-q:v", str(max(1, min(100, 100 - crf))))
+    raise ValueError(f"unknown encoder: {encoder}")

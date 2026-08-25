@@ -9,8 +9,20 @@ from dataclasses import dataclass
 
 from src.compiler.video import filter_chain, ken_burns_chain
 
-VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv", ".avi"}
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+
+def snap_timeline(segments, fps):
+    """Return segments with every start/end snapped to the nearest whole frame.
+
+    Deterministic: each boundary becomes round(t * fps) / fps, so chunk
+    boundaries and the verification gate compare against frame-exact times
+    and per-chunk rounding drift cannot accumulate (issues.md #16).
+    """
+    frame = 1.0 / fps
+    return [
+        dict(seg, start=round(seg["start"] * fps) / fps,
+             end=round(seg["end"] * fps) / fps)
+        for seg in segments
+    ]
 
 
 @dataclass(frozen=True)
@@ -269,11 +281,14 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
                    ass_path=None):
     """Compile config + segments (+ audio) into one ffmpeg invocation.
 
-    Asset paths in segments are resolved against project_dir. AudioSpec
-    paths are used as given (main.py resolves them against project_dir).
-    A HardwareProfile with a non-empty hw_chain appends upload nodes
-    before the encoder; None or CPU_PROFILE emits the plain CPU graph.
-    ass_path, when set, burns the generated .ass via the subtitles filter.
+    Asset paths in segments are resolved against project_dir. Each segment
+    reference registers its own finite input (no -loop 1, no split fan-out);
+    still images are expected to be materialized into finite clips by the
+    caller (main.py) before compile. AudioSpec paths are used as given
+    (main.py resolves them against project_dir). A HardwareProfile with a
+    non-empty hw_chain appends upload nodes before the encoder; None or
+    CPU_PROFILE emits the plain CPU graph. ass_path, when set, burns the
+    generated .ass via the subtitles filter.
     """
     assert isinstance(segments, list) and segments, "cutlist must be a non-empty array"
     width, height = config["resolution"]
@@ -281,65 +296,23 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
     duration = segments[-1]["end"]
 
     inputs = []
-    asset_index = {}
-    segment_refs = {}
-
-    for seg in segments:
-        asset = seg.get("asset")
-        if asset is None:
+    segment_inputs = {}
+    for i, seg in enumerate(segments):
+        if seg.get("asset") is None or seg.get("filter") == "white_flash":
+            segment_inputs[i] = None
             continue
-        full_asset = os.path.join(project_dir, asset)
-        if full_asset in asset_index:
-            segment_refs[asset_index[full_asset]] += 1
-            continue
-        index = len(inputs)
-        ext = os.path.splitext(asset)[1].lower()
-        if ext in IMAGE_EXTS:
-            inputs.append(["-loop", "1", "-framerate", str(fps), "-i", full_asset])
-        else:
-            inputs.append(["-i", full_asset])
-        asset_index[full_asset] = index
-        segment_refs[index] = 1
+        inputs.append(["-i", os.path.join(project_dir, seg["asset"])])
+        segment_inputs[i] = len(inputs) - 1
 
-    # Overlay assets (alpha layers, logos, rain) are additional inputs.
-    overlay_index = {}
-    overlay_refs = {}
-    for seg in segments:
-        for ov in seg.get("overlays", []):
-            full_asset = os.path.join(project_dir, ov["asset"])
-            if full_asset in overlay_index:
-                overlay_refs[overlay_index[full_asset]] += 1
-                continue
-            index = len(inputs)
-            ext = os.path.splitext(ov["asset"])[1].lower()
-            if ext in IMAGE_EXTS:
-                inputs.append(["-loop", "1", "-framerate", str(fps), "-i", full_asset])
-            else:
-                inputs.append(["-i", full_asset])
-            overlay_index[full_asset] = index
-            overlay_refs[index] = 1
+    # Overlay assets (alpha layers, logos, rain) are additional inputs,
+    # one per reference: finite video only, no -loop 1, no split fan-out.
+    overlay_inputs = {}
+    for i, seg in enumerate(segments):
+        for j, ov in enumerate(seg.get("overlays", [])):
+            inputs.append(["-i", os.path.join(project_dir, ov["asset"])])
+            overlay_inputs[(i, j)] = len(inputs) - 1
 
     chains = []
-    split_labels = {}
-    for index, count in segment_refs.items():
-        if count > 1:
-            labels = "".join(f"[v{index}_{k}]" for k in range(count))
-            chains.append(f"[{index}:v]split={count}{labels}")
-            split_labels[index] = [f"[v{index}_{k}]" for k in range(count)]
-        else:
-            split_labels[index] = [f"[{index}:v]"]
-
-    overlay_split_labels = {}
-    for index, count in overlay_refs.items():
-        if count > 1:
-            labels = "".join(f"[ov{index}_{k}]" for k in range(count))
-            chains.append(f"[{index}:v]split={count}{labels}")
-            overlay_split_labels[index] = [f"[ov{index}_{k}]" for k in range(count)]
-        else:
-            overlay_split_labels[index] = [f"[{index}:v]"]
-
-    ref_counter = {}
-    overlay_counter = {}
     easing = config.get("ken_burns_easing", "linear")
     for i, seg in enumerate(segments):
         asset = seg.get("asset")
@@ -351,15 +324,11 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
                 seg = dict(seg, filter=config["default_filter"])
             if seg.get("effect") is None and config.get("default_effect"):
                 seg = dict(seg, effect=config["default_effect"])
-            index = asset_index[os.path.join(project_dir, seg["asset"])]
-            label = split_labels[index][ref_counter.get(index, 0)]
-            ref_counter[index] = ref_counter.get(index, 0) + 1
+            label = f"[{segment_inputs[i]}:v]"
             chain = _segment_chain(label, seg, width, height, fps, easing)
         chains.append(f"{chain}[seg{i}]")
         for j, ov in enumerate(seg.get("overlays", [])):
-            ov_index = overlay_index[os.path.join(project_dir, ov["asset"])]
-            ov_src = overlay_split_labels[ov_index][overlay_counter.get(ov_index, 0)]
-            overlay_counter[ov_index] = overlay_counter.get(ov_index, 0) + 1
+            ov_src = f"[{overlay_inputs[(i, j)]}:v]"
             opacity = ov.get("opacity", 1.0)
             if opacity < 1.0:
                 prep_label = f"[ovp{i}_{j}]"
@@ -376,11 +345,17 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
         t_chains, _ = _transition_chains(
             segments, transition_mode, transition_d, width, height, fps)
         chains.extend(t_chains)
+        chains.append(f"[vcat]trim=duration={_fmt(duration)}[vfps]")
+        current = "[vfps]"
     else:
-        seg_labels = "".join(f"[seg{i}]" for i in range(len(segments)))
-        chains.append(f"{seg_labels}concat=n={len(segments)}:v=1:a=0[vcat]")
-    chains.append(f"[vcat]fps={fps},trim=duration={_fmt(duration)},setpts=PTS-STARTPTS[vfps]")
-    current = "[vfps]"
+        if len(segments) == 1:
+            chains.append("[seg0]trim=duration={}[vfps]".format(_fmt(duration)))
+            current = "[vfps]"
+        else:
+            seg_labels = "".join(f"[seg{i}]" for i in range(len(segments)))
+            chains.append(f"{seg_labels}concat=n={len(segments)}:v=1:a=0[vcat]")
+            chains.append(f"[vcat]trim=duration={_fmt(duration)}[vfps]")
+            current = "[vfps]"
     lut = config.get("lut")
     if lut:
         lut_path = os.path.join(project_dir, lut)

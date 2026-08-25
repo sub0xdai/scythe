@@ -23,10 +23,11 @@ Project directory structure:
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 
-from src.compiler import AudioSpec, compile_graph
+from src.compiler import AudioSpec, compile_graph, snap_timeline
 from src.compiler.text import build_ass
 from src.gpu import (
     CPU_PROFILE,
@@ -34,12 +35,49 @@ from src.gpu import (
     parse_encoders,
     probe,
     profile_for,
+    quality_for,
 )
 from src.telemetry import ProgressParser
 from src.themes import ThemeError, load_theme
 from src.validator import validate
+from src.verify import VerificationError, verify
 
 MACHINE = False  # JSON events are the only stdout content in machine mode
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
+
+
+def _materialize_stills(segments, project_dir, fps, out_dir):
+    """One finite clip per image reference; rewrite the asset path in place.
+
+    Images are single frames; without -loop 1 they cannot carry a segment's
+    duration, and -loop 1 in the render graph is the unbounded-queue source
+    (issues.md #12/#17). Materialize each image reference to a finite clip of
+    exactly the snapped segment span, then let the compiler open it as plain
+    video. Returns the created clip paths for cleanup.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    created = []
+    counter = 0
+    for seg in segments:
+        duration = seg["end"] - seg["start"]
+        refs = []
+        if seg.get("asset") and os.path.splitext(seg["asset"])[1].lower() in IMAGE_EXTS:
+            refs.append((seg, "asset"))
+        for ov in seg.get("overlays", []):
+            if os.path.splitext(ov["asset"])[1].lower() in IMAGE_EXTS:
+                refs.append((ov, "asset"))
+        for holder, key in refs:
+            full = os.path.join(project_dir, holder[key])
+            clip = os.path.join(out_dir, f"clip_{counter}.mp4")
+            cmd = ["ffmpeg", "-y", "-loop", "1", "-framerate", str(fps),
+                   "-i", full, "-t", f"{duration:g}", "-r", str(fps),
+                   "-pix_fmt", "yuv420p", clip]
+            subprocess.run(cmd, check=True, capture_output=True)
+            holder[key] = os.path.relpath(clip, project_dir)
+            created.append(clip)
+            counter += 1
+    return created
 
 
 def log(msg):
@@ -72,11 +110,13 @@ def _tmp_path(out_path):
     return out_path[:-4] + ".tmp.mp4"
 
 
-def _run_render(cmd, duration, output_paths):
+def _run_render(cmd, duration, output_paths, segments=None, fps=None):
     """Run ffmpeg with -progress pipe:1, streaming telemetry events.
 
-    Outputs are written to <name>.tmp.mp4 and atomically renamed on success,
-    so a killed render never leaves a half-written final file.
+    Outputs are written to <name>.tmp.mp4 and verified before the atomic
+    rename: duration must match the cutlist span, frame count must be
+    exact, and the picture must be live. A failed gate deletes the tmp
+    output and aborts without renaming.
     """
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -87,6 +127,15 @@ def _run_render(cmd, duration, output_paths):
     proc.wait()
     if proc.returncode != 0:
         _fail(f"FFmpeg failed:\n{stderr[-4000:]}", code=proc.returncode)
+    if segments is not None and fps is not None:
+        for out_path in output_paths:
+            tmp = _tmp_path(out_path)
+            try:
+                verify(tmp, segments, fps, span=duration)
+            except VerificationError as e:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                _fail(f"Render failed verification: {e}")
     for out_path in output_paths:
         os.replace(_tmp_path(out_path), out_path)
     if MACHINE:
@@ -119,6 +168,7 @@ DEFAULTS = {
     "transition_mode": "hard_cut",
     "transition_duration": 0.5,
     "ken_burns_easing": "linear",
+    "max_segments_per_chunk": 20,
     "outputs": [
         {"name": "master", "crf": 18},
         {"name": "web", "max_height": 720, "crf": 23},
@@ -325,6 +375,8 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
         log(f"  ({len(violations)} violation(s))")
         sys.exit(1)
 
+    segments = snap_timeline(segments, config["fps"])
+
     output_dir = os.path.join(project_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -341,7 +393,144 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
     if config["audio_offset"]:
         log(f"  Offset:   {config['audio_offset']:.1f}s")
 
+    materialized = _materialize_stills(
+        segments, project_dir, config["fps"],
+        os.path.join(output_dir, ".materialized"))
+    if materialized:
+        log(f"  Materialized: {len(materialized)} still clip(s)")
+
+    try:
+        _render_project(project_dir, config, segments, audio, output_dir)
+    finally:
+        for clip in materialized:
+            if os.path.exists(clip):
+                os.remove(clip)
+        mat_dir = os.path.join(output_dir, ".materialized")
+        if os.path.isdir(mat_dir) and not os.listdir(mat_dir):
+            os.rmdir(mat_dir)
+
+
+def _chunk_segments(segments, max_per_chunk):
+    """Split a snapped hard-cut timeline into chunks at segment boundaries.
+
+    Boundaries are segment boundaries, which the frame-aligned timeline makes
+    exact multiples of 1/fps, so concatenating chunk outputs cannot drift.
+    """
+    assert max_per_chunk > 0, "max_segments_per_chunk must be > 0"
+    return [segments[i:i + max_per_chunk]
+            for i in range(0, len(segments), max_per_chunk)]
+
+
+def _render_chunk(project_dir, config, chunk, profile, chunk_dir, k):
+    """Render one chunk's video per output (no audio). Returns output paths."""
+    t0 = chunk[0]["start"]
+    local = [dict(seg, start=seg["start"] - t0, end=seg["end"] - t0) for seg in chunk]
+    graph = compile_graph(config, local, None, project_dir, profile, None)
+    paths = {}
+    for out in graph.outputs:
+        paths[out.name] = os.path.join(chunk_dir, f"{out.name}_{k}.mp4")
+    cmd = ["ffmpeg", "-y", *profile.extra_args]
+    for arg_list in graph.input_args:
+        cmd.extend(arg_list)
+    cmd += ["-filter_complex", graph.filter_complex]
+    for i, out in enumerate(graph.outputs):
+        cmd += ["-map", out.label, "-c:v", profile.encoder,
+                *quality_for(profile.encoder, out.crf), "-pix_fmt", "yuv420p",
+                paths[out.name]]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
+    return paths
+
+
+def _render_audio(project_dir, config, audio, duration, profile, out_path):
+    """Master the full audio mix once (loudnorm, ducking) to out_path."""
+    cover = [{"start": 0.0, "end": duration, "phase": "hook", "text": None,
+              "asset": None, "filter": "white_flash", "effect": None}]
+    graph = compile_graph(config, cover, audio, project_dir, profile, None)
+    cmd = ["ffmpeg", "-y", *profile.extra_args]
+    for arg_list in graph.input_args:
+        cmd.extend(arg_list)
+    cmd += ["-filter_complex", graph.filter_complex]
+    cmd += ["-map", "[vfps]", "-f", "null", "-"]
+    cmd += ["-map", graph.audio_maps[0], "-c:a", "aac", "-b:a", "192k", out_path]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
+
+
+def _concat_chunks(chunk_paths, out_path):
+    """Concat video chunks with the concat demuxer, stream copy, no re-encode."""
+    list_path = out_path + ".concat.txt"
+    with open(list_path, "w") as f:
+        for path in chunk_paths:
+            f.write(f"file '{path}'\n")
+    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+           "-c", "copy", out_path]
+    subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
+    os.remove(list_path)
+
+
+def _render_chunked(project_dir, config, segments, audio, output_dir, profile):
+    """Chunked render: per-chunk video passes, stream-copy concat, one audio pass."""
+    chunks = _chunk_segments(segments, config["max_segments_per_chunk"])
+    chunk_dir = os.path.join(output_dir, ".chunks")
+    os.makedirs(chunk_dir, exist_ok=True)
+    log(f"Chunked render: {len(chunks)} chunks of ≤{config['max_segments_per_chunk']} segments")
     duration = segments[-1]["end"]
+    outputs_cfg = config.get("outputs") or [{"name": "render"}]
+    names = [o["name"] for o in outputs_cfg]
+
+    try:
+        chunk_paths = {name: [] for name in names}
+        for k, chunk in enumerate(chunks):
+            paths = _render_chunk(project_dir, config, chunk, profile, chunk_dir, k)
+            for name, path in paths.items():
+                chunk_paths[name].append(path)
+
+        audio_path = None
+        if audio is not None:
+            audio_path = os.path.join(chunk_dir, "audio.m4a")
+            _render_audio(project_dir, config, audio, duration, profile, audio_path)
+
+        output_paths = []
+        for name in names:
+            out_path = os.path.join(output_dir, f"{name}.mp4")
+            output_paths.append(out_path)
+            tmp = _tmp_path(out_path)
+            _concat_chunks(chunk_paths[name], tmp)
+            if audio_path:
+                muxed = tmp + ".muxed.mp4"
+                mux = ["ffmpeg", "-y", "-i", tmp, "-i", audio_path,
+                       "-map", "0:v", "-map", "1:a", "-c", "copy",
+                       "-movflags", "+faststart", muxed]
+                subprocess.run(mux, check=True, capture_output=True, timeout=3600)
+                os.remove(tmp)
+                tmp = muxed
+            # verify before rename (chunk boundaries are frame-exact by
+            # construction; the gate confirms the concatenation did not drift)
+            try:
+                verify(tmp, segments, config["fps"])
+            except VerificationError as e:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                _fail(f"Render failed verification: {e}")
+            os.replace(tmp, out_path)
+        log(f"Done → {', '.join(output_paths)}")
+    finally:
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+
+
+def _render_project(project_dir, config, segments, audio, output_dir):
+    """Compile and execute the render for a (snapped, materialized) timeline."""
+    duration = segments[-1]["end"]
+    max_chunk = config.get("max_segments_per_chunk", 20)
+    transition_mode = config.get("transition_mode", "hard_cut")
+    if len(segments) > max_chunk and transition_mode == "hard_cut":
+        profile = _select_profile()
+        log(f"  Encoder: {profile.encoder}")
+        _render_chunked(project_dir, config, segments, audio, output_dir, profile)
+        return
+    if len(segments) > max_chunk:
+        log(f"  WARNING: {len(segments)} segments exceed max_segments_per_chunk "
+            f"({max_chunk}) with transition_mode '{transition_mode}'; "
+            "chunking requires hard_cut, rendering single-pass (memory unbounded)")
     log("Compiling filtergraph...")
     log("Probing hardware...")
     profile = _select_profile()
@@ -354,6 +543,7 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
             f.write(ass_content)
         log(f"  Subtitles: {ass_path}")
     graph = compile_graph(config, segments, audio, project_dir, profile, ass_path)
+    duration = graph.duration  # post-transition span; the gate compares against this
 
     cmd = ["ffmpeg", "-y", *profile.extra_args]
     for arg_list in graph.input_args:
@@ -363,8 +553,8 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
     for i, out in enumerate(graph.outputs):
         out_path = os.path.join(output_dir, f"{out.name}.mp4")
         output_paths.append(out_path)
-        cmd += ["-map", out.label, "-c:v", profile.encoder, "-preset", "medium",
-                "-crf", str(out.crf), "-threads", "4", "-pix_fmt", "yuv420p",
+        cmd += ["-map", out.label, "-c:v", profile.encoder,
+                *quality_for(profile.encoder, out.crf), "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart"]
         if graph.audio_maps:
             cmd += ["-map", graph.audio_maps[i], "-c:a", "aac"]
@@ -374,7 +564,7 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
 
     log(f"Rendering {duration:.1f}s → {', '.join(output_paths)}...")
     log("Running: " + " ".join(cmd))
-    _run_render(cmd, duration, output_paths)
+    _run_render(cmd, duration, output_paths, segments, config["fps"])
 
 
 # ── Beat-Detect Mode (legacy) ─────────────────────────────────────────────

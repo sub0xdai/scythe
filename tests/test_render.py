@@ -170,5 +170,102 @@ class TextBurnE2ETests(unittest.TestCase):
             self.assertEqual(dark, 0, "textless white render has dark pixels")
 
 
+class ChunkedRenderTests(unittest.TestCase):
+    """Render-performance CP-2: timelines above max_segments_per_chunk render
+    in bounded chunks and stay frame-exact."""
+
+    def _render(self, tmp, segments, max_chunk):
+        prompts = Path(tmp, "prompts")
+        prompts.mkdir(parents=True)
+        (prompts / "cutlist.json").write_text(json.dumps(segments))
+        (Path(tmp) / "config.json").write_text(json.dumps({
+            "resolution": [640, 360], "fps": 15,
+            "font": "LiberationSerif-Bold", "font_size": 28,
+            "max_segments_per_chunk": max_chunk,
+            "outputs": [{"name": "master", "crf": 18}],
+        }))
+        footage = Path(tmp, "raw_footage")
+        footage.mkdir(parents=True)
+        shutil.copy2(REPO_ROOT / FIXTURE / "raw_footage" / "clip.mp4", footage)
+        result = subprocess.run(
+            [sys.executable, "main.py", "--project", tmp],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300,
+        )
+        return result, Path(tmp, "output", "master.mp4")
+
+    def test_chunked_render_is_frame_exact(self):
+        # 5 x 1s segments (alternating filters to pass adjacency), max_chunk=2
+        # -> 3 chunks; output must be exactly 5s * 15fps = 75 frames.
+        segments = [
+            {"start": i, "end": i + 1, "phase": "hook", "text": None,
+             "asset": "raw_footage/clip.mp4",
+             "filter": "grayscale" if i % 2 == 0 else "color_invert",
+             "effect": None}
+            for i in range(5)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            result, master = self._render(tmp, segments, max_chunk=2)
+            self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+            self.assertIn("Chunked render", result.stdout)
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v",
+                 "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(master)],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(int(probe.stdout.strip()), 75)
+
+    def test_chunked_render_with_audio_muxes(self):
+        """Chunked render with a soundtrack keeps audio (single full mix pass)."""
+        segments = [
+            {"start": i, "end": i + 1, "phase": "hook", "text": None,
+             "asset": "raw_footage/clip.mp4",
+             "filter": "grayscale" if i % 2 == 0 else "color_invert",
+             "effect": None}
+            for i in range(5)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            prompts = Path(tmp, "prompts")
+            prompts.mkdir(parents=True)
+            (prompts / "cutlist.json").write_text(json.dumps(segments))
+            (Path(tmp) / "config.json").write_text(json.dumps({
+                "resolution": [640, 360], "fps": 15,
+                "font": "LiberationSerif-Bold", "font_size": 28,
+                "max_segments_per_chunk": 2,
+                "outputs": [{"name": "master", "crf": 18}],
+            }))
+            footage = Path(tmp, "raw_footage")
+            audio = Path(tmp, "audio")
+            footage.mkdir(parents=True)
+            audio.mkdir(parents=True)
+            shutil.copy2(REPO_ROOT / FIXTURE / "raw_footage" / "clip.mp4", footage)
+            shutil.copy2(REPO_ROOT / FIXTURE / "audio" / "soundtrack.wav", audio)
+            shutil.copy2(REPO_ROOT / FIXTURE / "audio" / "voiceover.wav", audio)
+            result = subprocess.run(
+                [sys.executable, "main.py", "--project", tmp],
+                cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
+            master = Path(tmp, "output", "master.mp4")
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "a",
+                 "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(master)],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(probe.stdout.strip(), "audio")
+
+    def test_below_threshold_is_single_pass(self):
+        # 2 segments, max_chunk=2 -> single-pass (no chunk log).
+        segments = [
+            {"start": 0.0, "end": 1.0, "phase": "hook", "text": None,
+             "asset": "raw_footage/clip.mp4", "filter": "grayscale", "effect": None},
+            {"start": 1.0, "end": 2.0, "phase": "hook", "text": None,
+             "asset": "raw_footage/clip.mp4", "filter": "color_invert", "effect": None},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            result, _ = self._render(tmp, segments, max_chunk=2)
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+        self.assertNotIn("Chunked render", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

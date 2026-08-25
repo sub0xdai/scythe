@@ -6,7 +6,7 @@ scenarios. Runs inside the container where the full suite executes.
 
 import unittest
 
-from src.compiler.graph import AudioSpec, compile_graph
+from src.compiler.graph import AudioSpec, compile_graph, snap_timeline
 
 CONFIG = {
     "resolution": [360, 640],
@@ -80,7 +80,9 @@ class GraphStructureTests(unittest.TestCase):
         graph = compile_graph(CONFIG, segments, None)
         self.assertIn("overlay=x='100':y='-100*t'", graph.filter_complex)
         self.assertIn("colorchannelmixer=aa=0.5", graph.filter_complex)
-        self.assertIn("-loop", graph.input_args[-1])
+        logo_inputs = [a for a in graph.input_args if "logo.png" in " ".join(a)]
+        self.assertEqual(len(logo_inputs), 1)
+        self.assertNotIn("-loop", logo_inputs[0])
 
     def test_drawtext_carries_text(self):
         graph = _graph(ass_path="output/subtitles.ass")
@@ -101,18 +103,35 @@ class GraphStructureTests(unittest.TestCase):
         graph = _graph()
         self.assertIn("concat=n=4:v=1:a=0", graph.filter_complex)
 
-    def test_input_dedup_and_labels(self):
+    def test_per_reference_inputs_no_loop_no_split(self):
+        """Each segment reference registers its own finite input; no -loop 1,
+        no split=N fan-out anywhere in the graph (render-performance CP-1)."""
         graph = _graph()
         clip_inputs = [a for a in graph.input_args if "clip.mp4" in " ".join(a)]
-        self.assertEqual(len(clip_inputs), 1)
-        self.assertEqual(len(graph.input_args), 4)  # clip.mp4, photo.png, soundtrack, voiceover
-        self.assertIn("split=2", graph.filter_complex)
+        self.assertEqual(len(clip_inputs), 2)  # one input per reference, no dedup
+        self.assertEqual(len(graph.input_args), 5)  # clip x2, photo, soundtrack, voiceover
+        for args in graph.input_args:
+            self.assertNotIn("-loop", args)
+            self.assertNotIn("-framerate", args)
+        self.assertNotIn("]split=", graph.filter_complex)  # no video fan-out; asplit for audio ducking is fine
 
-    def test_image_input_looped(self):
-        graph = _graph()
-        image_args = [a for a in graph.input_args if "photo.png" in " ".join(a)][0]
-        self.assertIn("-loop", image_args)
-        self.assertIn("-framerate", image_args)
+    def test_snap_timeline_rounds_to_frame_boundary(self):
+        segments = [
+            {"start": 0.0, "end": 2.08, "phase": "hook", "text": None},
+            {"start": 2.08, "end": 4.0, "phase": "hook", "text": None},
+        ]
+        snapped = snap_timeline(segments, 15)
+        self.assertEqual(snapped[0]["end"], 31 / 15)  # round(2.08*15)/15
+        self.assertEqual(snapped[1]["start"], 31 / 15)
+        self.assertEqual(snapped[-1]["end"], 4.0)
+
+    def test_snap_timeline_preserves_continuity(self):
+        segments = [
+            {"start": 0.0, "end": 1.07, "phase": "hook", "text": None},
+            {"start": 1.07, "end": 2.0, "phase": "hook", "text": None},
+        ]
+        snapped = snap_timeline(segments, 15)
+        self.assertEqual(snapped[0]["end"], snapped[1]["start"])
 
     def test_deterministic(self):
         self.assertEqual(_graph().filter_complex, _graph().filter_complex)
@@ -130,9 +149,10 @@ class GraphStructureTests(unittest.TestCase):
     def test_segment_labels_tight(self):
         """Input labels must be directly followed by the first filter (no comma)."""
         graph = _graph()
-        self.assertIn("[v0_0]trim=", graph.filter_complex)
+        self.assertIn("[0:v]trim=", graph.filter_complex)
         self.assertIn("[1:v]trim=", graph.filter_complex)
-        self.assertIn("[2:a]atrim=", graph.filter_complex)
+        self.assertIn("[2:v]trim=", graph.filter_complex)
+        self.assertIn("[3:a]atrim=", graph.filter_complex)
 
 
 if __name__ == "__main__":

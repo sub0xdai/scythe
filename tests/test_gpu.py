@@ -22,6 +22,7 @@ from src.gpu import (
     parse_encoders,
     probe,
     profile_for,
+    quality_for,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -91,6 +92,43 @@ class ProbeSelectionTests(unittest.TestCase):
             probe(encoder_list=set(), dry_run_fn=lambda name, args: True),
             CPU_PROFILE,
         )
+
+
+class RateControlTests(unittest.TestCase):
+    """Per-encoder rate control mapping (render-performance CP-3)."""
+
+    def test_cpu_gets_crf_and_veryfast(self):
+        args = quality_for("libx264", 18)
+        self.assertEqual(args, ("-preset", "veryfast", "-crf", "18"))
+
+    def test_nvenc_gets_nvenc_args(self):
+        args = quality_for("h264_nvenc", 18)
+        self.assertEqual(args, ("-rc", "vbr", "-cq", "18", "-preset", "p5"))
+        self.assertNotIn("-crf", args)
+
+    def test_qsv_gets_global_quality(self):
+        args = quality_for("h264_qsv", 18)
+        self.assertEqual(args, ("-global_quality", "18"))
+        self.assertNotIn("-crf", args)
+
+    def test_vaapi_gets_global_quality(self):
+        args = quality_for("h264_vaapi", 18)
+        self.assertEqual(args, ("-global_quality", "18"))
+        self.assertNotIn("-crf", args)
+
+    def test_videotoolbox_inverts_scale(self):
+        args = quality_for("h264_videotoolbox", 23)
+        self.assertEqual(args, ("-q:v", "77"))  # 100 - 23
+        self.assertNotIn("-crf", args)
+        self.assertNotIn("-cq", args)
+
+    def test_videotoolbox_clamps(self):
+        self.assertEqual(quality_for("h264_videotoolbox", 0), ("-q:v", "100"))
+        self.assertEqual(quality_for("h264_videotoolbox", 99), ("-q:v", "1"))
+
+    def test_unknown_encoder_raises(self):
+        with self.assertRaises(ValueError):
+            quality_for("h264_bogus", 18)
 
 
 class ProfileTableTests(unittest.TestCase):
