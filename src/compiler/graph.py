@@ -1,13 +1,19 @@
-"""Compile config + cutlist into one ffmpeg invocation (Spec B).
+"""Compile config + timeline into one ffmpeg invocation.
 
 Pure functions: no ffmpeg execution, no file writes. The renderer
 (main.py) executes the returned CompiledGraph.
+
+A timeline is a base video track (contiguous, canvas-sized) plus optional
+overlay video tracks composited by time window, plus optional audio
+tracks mixed with per-track gain, fades and sidechain ducking.
 """
 
 import os
 from dataclasses import dataclass
 
+from src.compiler.keyframes import keyframe_chain
 from src.compiler.video import filter_chain, ken_burns_chain
+from src.tracks import Timeline, audio_spec_to_tracks, parse_document
 
 
 def snap_timeline(segments, fps):
@@ -15,7 +21,7 @@ def snap_timeline(segments, fps):
 
     Deterministic: each boundary becomes round(t * fps) / fps, so chunk
     boundaries and the verification gate compare against frame-exact times
-    and per-chunk rounding drift cannot accumulate (issues.md #16).
+    and per-chunk rounding drift cannot accumulate.
     """
     frame = 1.0 / fps
     return [
@@ -25,9 +31,22 @@ def snap_timeline(segments, fps):
     ]
 
 
+def snap_tracks(timeline, fps):
+    """Snap every video track's segment boundaries to whole frames."""
+    snapped = [
+        type(track)(id=track.id, segments=snap_timeline(track.segments, fps),
+                    x=track.x, y=track.y, scale=track.scale,
+                    opacity=track.opacity, base=track.base)
+        for track in timeline.video
+    ]
+    return Timeline(video=snapped, audio=list(timeline.audio),
+                    duration=snapped[0].segments[-1]["end"]
+                    if snapped[0].segments else timeline.duration)
+
+
 @dataclass(frozen=True)
 class AudioSpec:
-    """Resolved audio inputs. soundtrack is ducked to 0.3 under voiceover."""
+    """Legacy two-track audio: soundtrack ducked under the voiceover."""
     soundtrack: str | None = None
     voiceover: str | None = None
 
@@ -43,10 +62,10 @@ class VideoOutput:
 @dataclass(frozen=True)
 class CompiledGraph:
     """One ffmpeg invocation: per-input arg lists, the filtergraph, outputs."""
-    input_args: list[list[str]]
+    input_args: list
     filter_complex: str
-    outputs: list[VideoOutput]
-    audio_maps: list[str] | None
+    outputs: list
+    audio_maps: list | None
     duration: float
 
 
@@ -61,38 +80,89 @@ def _drift_expr(pos, drift):
     return _fmt(pos)
 
 
-def _segment_chain(label, seg, width, height, fps, easing="linear"):
-    start = seg["start"]
-    duration = seg["end"] - start
-    filter_name = seg.get("filter")
-    effect_name = seg.get("effect")
+def _fade_chains(seg, duration, alpha):
+    chains = []
+    fade_in = seg.get("fade_in") or 0
+    fade_out = seg.get("fade_out") or 0
+    opts = ":alpha=1" if alpha else ""
+    if fade_in > 0:
+        chains.append(f"fade=t=in:st=0:d={_fmt(min(fade_in, duration))}{opts}")
+    if fade_out > 0:
+        start = max(0.0, duration - fade_out)
+        chains.append(f"fade=t=out:st={_fmt(start)}:d={_fmt(fade_out)}{opts}")
+    return chains
 
-    if filter_name == "white_flash":
-        return (f"color=c=white:s={width}x{height}:r={fps}:d={_fmt(duration)}"
-                ",format=yuv420p")
-    if seg.get("asset") is None:
-        return (f"color=c=black:s={width}x{height}:r={fps}:d={_fmt(duration)}"
-                ",format=yuv420p")
+
+def _solid_source(seg, width, height, fps, duration):
+    color = seg.get("color")
+    if color is None:
+        white = seg.get("filter") == "white_flash"
+        color = "white" if white else "black"
+    return (f"color=c={color}:s={width}x{height}:r={fps}:d={_fmt(duration)}"
+            ",format=yuv420p")
+
+
+def _is_generated(seg):
+    return seg.get("asset") is None or seg.get("filter") == "white_flash"
+
+
+def _segment_chain(label, seg, width, height, fps, easing="linear",
+                   alpha=False, track_scale=1.0, track_opacity=1.0):
+    """One segment's full picture pipeline, ending at canvas size."""
+    duration = seg["end"] - seg["start"]
+    frame_count = max(1, int(round(duration * fps)))
+    speed = seg.get("speed")
+    speed = 1.0 if speed is None else float(speed)
+    if speed <= 0:
+        raise ValueError(f"segment speed must be > 0, got {speed}")
+    box_w = max(2, round(width * track_scale / 2) * 2)
+    box_h = max(2, round(height * track_scale / 2) * 2)
+
+    if _is_generated(seg):
+        parts = [_solid_source(seg, box_w, box_h, fps, duration)]
+        parts.extend(_fade_chains(seg, duration, alpha))
+        if alpha:
+            opacity = seg.get("opacity", 1.0) * track_opacity
+            if opacity < 1.0:
+                parts.append(f"colorchannelmixer=aa={_fmt(opacity)}")
+            parts.append("format=rgba")
+        return (label or "") + ",".join(parts)
 
     clip_start = seg.get("clip_start", 0)
-    clip_end = seg.get("clip_end", clip_start + duration)
-    frame_count = max(1, int(round(duration * fps)))
+    clip_end = seg.get("clip_end", clip_start + duration * speed)
+    scale_filter = seg.get("scale")
     parts = [
         f"trim=start={_fmt(clip_start)}:end={_fmt(clip_end)}",
         "setpts=PTS-STARTPTS",
         f"fps={fps}",
-        f"scale={width}:{height}:force_original_aspect_ratio=increase",
-        f"crop={width}:{height}",
     ]
-    filters = filter_chain(filter_name)
+    if speed != 1.0:
+        parts.append(f"setpts=PTS/{_fmt(speed)}")
+    if scale_filter is not None and scale_filter != 1.0:
+        parts.append(f"scale=iw*{_fmt(scale_filter)}:ih*{_fmt(scale_filter)}")
+    parts += [
+        f"scale={box_w}:{box_h}:force_original_aspect_ratio=increase",
+        f"crop={box_w}:{box_h}",
+    ]
+    filters = filter_chain(seg.get("filter"))
     if filters:
         parts.append(filters)
-    motion = ken_burns_chain(effect_name, width, height, fps, frame_count, easing)
+    motion = keyframe_chain(seg.get("keyframes"), box_w, box_h, frame_count)
+    if not motion:
+        motion = ken_burns_chain(seg.get("effect"), box_w, box_h, fps,
+                                 frame_count, easing)
     if motion:
         parts.append(motion)
     parts.append("setsar=1")
-    parts.append("format=yuv420p")
-    return label + ",".join(parts)
+    parts.extend(_fade_chains(seg, duration, alpha))
+    if alpha:
+        opacity = seg.get("opacity", 1.0) * track_opacity
+        if opacity < 1.0:
+            parts.append(f"colorchannelmixer=aa={_fmt(opacity)}")
+        parts.append("format=rgba")
+    else:
+        parts.append("format=yuv420p")
+    return (label or "") + ",".join(parts)
 
 
 def _audio_maps(n_outputs, chains):
@@ -104,68 +174,208 @@ def _audio_maps(n_outputs, chains):
     return [f"[aout{k}]" for k in range(n_outputs)]
 
 
-def _audio_chains(audio, duration, config, audio_input_index, inputs,
-                  n_outputs=1):
+def _track_audio_chain(track, label, span, audio_offset=0.0, cleanup=False):
+    """Trim, clean, gain, fade and delay one audio track onto the timeline."""
+    duration = track.duration if track.duration is not None else max(
+        0.0, span - track.start)
+    duration = min(duration, max(0.0, span - track.start))
+    if duration <= 0:
+        raise ValueError(f"audio track '{track.id}': no room on the timeline")
+    offset = track.offset + audio_offset
+    parts = [
+        f"atrim=start={_fmt(offset)}:end={_fmt(offset + duration)}",
+        "asetpts=PTS-STARTPTS",
+    ]
+    if cleanup:
+        parts.append("afftdn=nf=-40:nt=w,agate=threshold=0.02:attack=20:release=250")
+    if track.gain != 1.0:
+        parts.append(f"volume={_fmt(track.gain)}")
+    if track.fade_in > 0:
+        parts.append(f"afade=t=in:st=0:d={_fmt(min(track.fade_in, duration))}")
+    if track.fade_out > 0:
+        parts.append(f"afade=t=out:st={_fmt(max(0.0, duration - track.fade_out))}"
+                     f":d={_fmt(track.fade_out)}")
+    if track.start > 0:
+        parts.append(f"adelay={round(track.start * 1000)}:all=1")
+    parts.append(f"apad,atrim=end={_fmt(span)}")
+    return f"{label}{','.join(parts)}[at_{track.id}]"
+
+
+def _audio_chains(tracks, span, config, start_index, inputs, n_outputs=1,
+                  project_dir="."):
     """Register audio inputs and return (chains, audio_maps).
 
-    Chain: voice cleanup -> sidechain ducking on the soundtrack ->
-    amix -> loudnorm to the configured LUFS target. One label per
-    output; asplit fans the mastered mix out when n_outputs > 1.
+    Each track is trimmed, cleaned, gained, faded and delayed onto the
+    timeline. A track with duck_under is compressed against the mix of the
+    tracks it names, then everything is summed and loudnorm-mastered.
     """
-    if audio is None or (audio.soundtrack is None and audio.voiceover is None):
+    if not tracks:
         return [], None
 
-    st_label = None
-    vo_label = None
-    if audio.soundtrack is not None:
-        inputs.append(["-i", audio.soundtrack])
-        st_label = f"[{audio_input_index}:a]"
-        audio_input_index += 1
-    if audio.voiceover is not None:
-        inputs.append(["-i", audio.voiceover])
-        vo_label = f"[{audio_input_index}:a]"
+    audio_offset = config.get("audio_offset", 0.0)
+    cleanup_enabled = config.get("voice_cleanup", True)
+    chains = []
+    raw_labels = {}
+    for k, track in enumerate(tracks):
+        inputs.append(["-i", os.path.join(project_dir, track.asset)])
+        label = f"[{start_index + k}:a]"
+        cleanup = cleanup_enabled and track.cleanup
+        chains.append(_track_audio_chain(track, label, span, audio_offset, cleanup))
+        raw_labels[track.id] = f"[at_{track.id}]"
 
-    offset = config.get("audio_offset", 0.0)
-    trim = f"atrim=start={_fmt(offset)}:end={_fmt(offset + duration)}"
+    by_id = {track.id: track for track in tracks}
+    duckers = [t for t in tracks if t.duck_under]
+    for track in duckers:
+        unknown = [d for d in track.duck_under if d not in by_id]
+        if unknown:
+            raise ValueError(f"audio track '{track.id}' ducks under unknown "
+                             f"track(s): {unknown}")
+
+    duck_refs = {track.id: 0 for track in tracks}
+    for track in duckers:
+        for trigger_id in track.duck_under:
+            duck_refs[trigger_id] += 1
+
+    available = {}
+    for track in tracks:
+        count = 1 + duck_refs[track.id]
+        if count == 1:
+            available[track.id] = [raw_labels[track.id]]
+            continue
+        splits = "".join(f"[atrig_{track.id}_{j}]" for j in range(count))
+        chains.append(f"{raw_labels[track.id]}asplit={count}{splits}")
+        available[track.id] = [f"[atrig_{track.id}_{j}]" for j in range(count)]
+
+    threshold = config.get("duck_threshold", 0.02)
+    ratio = config.get("duck_ratio", 2)
+    used = {track.id: 0 for track in tracks}
+    duck_labels = {}
+    for track in duckers:
+        picks = []
+        own = available[track.id][used[track.id]]
+        used[track.id] += 1
+        for trigger_id in track.duck_under:
+            picks.append(available[trigger_id][used[trigger_id]])
+            used[trigger_id] += 1
+        trigger = f"[atrig_{track.id}]"
+        if len(picks) == 1:
+            chains.append(f"{picks[0]}anull{trigger}")
+        else:
+            chains.append(f"{''.join(picks)}amix=inputs={len(picks)}"
+                          f":normalize=0{trigger}")
+        ducked = f"[aduck_{track.id}]"
+        chains.append(
+            f"{own}{trigger}sidechaincompress="
+            f"threshold={_fmt(threshold)}:ratio={_fmt(ratio)}"
+            f":attack=20:release=500{ducked}")
+        duck_labels[track.id] = ducked
+
+    final_labels = []
+    for track in tracks:
+        if track.id in duck_labels:
+            final_labels.append(duck_labels[track.id])
+            continue
+        index = used[track.id]
+        final_labels.append(available[track.id][index])
+        used[track.id] = index + 1
+    for track in tracks:
+        assert used[track.id] == len(available[track.id]), \
+            f"audio track '{track.id}' label consumed {used[track.id]} of " \
+            f"{len(available[track.id])}"
+
+    if len(final_labels) == 1:
+        chains.append(f"{final_labels[0]}anull[aout_raw]")
+    else:
+        chains.append(f"{''.join(final_labels)}amix=inputs={len(final_labels)}"
+                      f":normalize=0:duration=longest[aout_raw]")
     loudnorm = ("loudnorm=I={}:TP=-1.5:LRA=11,aresample=48000"
                 .format(_fmt(config.get("lufs_target", -14))))
-
-    if st_label and vo_label:
-        threshold = config.get("duck_threshold", 0.02)
-        ratio = config.get("duck_ratio", 2)
-        chains = [f"{st_label}{trim},asetpts=PTS-STARTPTS[st_t]"]
-        if config.get("voice_cleanup", True):
-            vo_clean = ("afftdn=nf=-40:nt=w,agate=threshold=0.02:attack=20:release=250,"
-                        f"{trim},asetpts=PTS-STARTPTS[vo0]")
-        else:
-            vo_clean = f"{trim},asetpts=PTS-STARTPTS[vo0]"
-        chains.append(f"{vo_label}{vo_clean}")
-        chains.append("[vo0]asplit=2[vo_sc][vo_mix]")
-        chains.append(
-            f"[st_t][vo_sc]sidechaincompress=threshold={_fmt(threshold)}"
-            f":ratio={_fmt(ratio)}:attack=20:release=500:makeup=1[st_ducked]")
-        chains.append("[st_ducked][vo_mix]amix=inputs=2:normalize=0:duration=first[aout_raw]")
-        chains.append(f"[aout_raw]{loudnorm}[aout]")
-        return chains, _audio_maps(n_outputs, chains)
-
-    label = st_label or vo_label
-    chains = [f"{label}{trim},asetpts=PTS-STARTPTS[aout_raw]",
-              f"[aout_raw]{loudnorm}[aout]"]
+    chains.append(f"[aout_raw]{loudnorm}[aout]")
     return chains, _audio_maps(n_outputs, chains)
 
+
+XFADE_TRANSITIONS = {
+    "fade", "wipeleft", "wiperight", "wipeup", "wipedown",
+    "slideleft", "slideright", "slideup", "slidedown",
+    "circlecrop", "rectcrop", "distance", "fadeblack", "fadewhite",
+    "radial", "smoothleft", "smoothright", "smoothup", "smoothdown",
+    "circleopen", "circleclose", "vertopen", "vertclose", "horzopen",
+    "horzclose", "dissolve", "pixelize", "diagtl", "diagtr", "diagbl",
+    "diagbr", "hlslice", "hrslice", "vuslice", "vdslice", "hblur",
+    "fadegrays", "wipetl", "wipetr", "wipebl", "wipebr", "squeezeh",
+    "squeezev",
+}
 
 XFADE_MODES = {
     "cross_dissolve": "fade",
     "dip_to_black": "fadeblack",
     "dip_to_white": "fadewhite",
-    "luma_wipe": "luma",
+    "luma_wipe": "hlslice",
+    "slide_left": "slideleft",
+    "slide_right": "slideright",
+    "slide_up": "slideup",
+    "slide_down": "slidedown",
+    "circle_open": "circleopen",
+    "circle_close": "circleclose",
+    "wipe_left": "wipeleft",
+    "wipe_right": "wiperight",
+    "pixelize": "pixelize",
+    "radial": "radial",
+    "dissolve": "dissolve",
 }
 
 
-def _xfade_mode(mode):
-    if mode not in XFADE_MODES:
-        raise ValueError(f"unknown transition_mode: {mode}")
-    return XFADE_MODES[mode]
+def resolve_transition(mode):
+    """Resolve a transition name to a libavfilter xfade transition."""
+    if mode in XFADE_MODES:
+        return XFADE_MODES[mode]
+    if mode in XFADE_TRANSITIONS:
+        return mode
+    raise ValueError(f"unknown transition: {mode}")
+
+
+def _boundary_transitions(segments, config, fps):
+    """Per-cut (mode, duration) pairs, or None for a plain concat timeline."""
+    default_mode = config.get("transition_mode", "hard_cut")
+    default_dur = config.get("transition_duration", 0.5)
+    explicit = any(seg.get("transition") for seg in segments[1:])
+    if default_mode == "hard_cut" and not explicit:
+        return None
+    frame = 1.0 / fps
+    out = []
+    for seg in segments[1:]:
+        mode = seg.get("transition") or default_mode
+        if mode == "hard_cut":
+            out.append(("fade", frame))
+            continue
+        duration = float(seg.get("transition_duration", default_dur))
+        if duration <= 0:
+            duration = frame
+        out.append((resolve_transition(mode), duration))
+    return out
+
+
+def _transition_chains(segments, boundaries):
+    """Chained xfade nodes replacing concat. Returns (chains, label, span)."""
+    for i, seg in enumerate(segments):
+        duration = seg["end"] - seg["start"]
+        if i > 0 and boundaries[i - 1][1] >= duration:
+            raise ValueError(
+                f"segment {i}: transition {boundaries[i - 1][1]}s is not "
+                f"shorter than the segment ({duration}s)")
+
+    chains = []
+    first = "[seg0]"
+    shift = 0.0
+    for k in range(1, len(segments)):
+        mode, duration = boundaries[k - 1]
+        shift += duration
+        offset = segments[k]["start"] - shift
+        out = "[vcat]" if k == len(segments) - 1 else f"[vx{k}]"
+        chains.append(f"{first}[seg{k}]xfade=transition={mode}"
+                      f":duration={_fmt(duration)}:offset={_fmt(offset)}{out}")
+        first = out
+    return chains, "[vcat]", segments[-1]["end"] - shift
 
 
 def _target_scale(output, width, height):
@@ -185,13 +395,7 @@ def _target_scale(output, width, height):
 
 
 def _output_chains(current, outputs_cfg, width, height, profile, chains):
-    """Append per-output tails; return the VideoOutput list for mapping.
-
-    No outputs configured -> the legacy single-output graph, byte-identical
-    to the pre-multi-format behavior. Otherwise a split node fans the final
-    frames into N tails; scale runs on CPU frames, so it precedes any
-    hardware upload (hw_chain).
-    """
+    """Append per-output tails; return the VideoOutput list for mapping."""
     cfg = outputs_cfg or []
     if not cfg:
         if profile is not None and profile.hw_chain:
@@ -240,126 +444,118 @@ def _output_chains(current, outputs_cfg, width, height, profile, chains):
     return outputs
 
 
-def _transition_chains(segments, mode, duration_s, width, height, fps):
-    """Chained xfade nodes replacing concat. Returns (chains, output_label)."""
-    for seg in segments:
-        if seg["end"] - seg["start"] <= duration_s:
-            raise ValueError(
-                f"transition_duration {duration_s}s exceeds a segment duration")
-
-    if mode == "luma_wipe":
-        count = len(segments) - 1
-        labels = "".join(f"[m{k}]" for k in range(count))
-        chains = [
-            f"nullsrc=s={width}x{height}:r={fps}:d={_fmt(segments[-1]['end'])},"
-            f"geq=r='X*255/{width}':g='X*255/{width}':b='X*255/{width}'[m0]",
-            f"[m0]split={count}{labels}",
-        ]
-        first = "[seg0]"
-        for k in range(1, len(segments)):
-            offset = segments[k]["start"] - k * duration_s
-            out = "[vcat]" if k == len(segments) - 1 else f"[vx{k}]"
-            chains.append(
-                f"{first}[seg{k}][m{k-1}]xfade=transition=luma"
-                f":duration={_fmt(duration_s)}:offset={_fmt(offset)}{out}")
-            first = out
-        return chains, "[vcat]"
-
-    chains = []
-    first = "[seg0]"
-    for k in range(1, len(segments)):
-        offset = segments[k]["start"] - k * duration_s
-        out = "[vcat]" if k == len(segments) - 1 else f"[vx{k}]"
-        chains.append(
-            f"{first}[seg{k}]xfade=transition={_xfade_mode(mode)}"
-            f":duration={_fmt(duration_s)}:offset={_fmt(offset)}{out}")
-        first = out
-    return chains, "[vcat]"
+def _resolve_timeline(document, audio):
+    if isinstance(document, Timeline):
+        return document
+    extra = audio_spec_to_tracks(audio) if isinstance(audio, AudioSpec) else list(audio or [])
+    return parse_document(document, extra)
 
 
-def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
-                   ass_path=None):
-    """Compile config + segments (+ audio) into one ffmpeg invocation.
+def compile_graph(config, document, audio=None, project_dir=".", profile=None,
+                  ass_path=None):
+    """Compile config + timeline (+ audio) into one ffmpeg invocation.
 
-    Asset paths in segments are resolved against project_dir. Each segment
-    reference registers its own finite input (no -loop 1, no split fan-out);
-    still images are expected to be materialized into finite clips by the
-    caller (main.py) before compile. AudioSpec paths are used as given
-    (main.py resolves them against project_dir). A HardwareProfile with a
-    non-empty hw_chain appends upload nodes before the encoder; None or
-    CPU_PROFILE emits the plain CPU graph. ass_path, when set, burns the
-    generated .ass via the subtitles filter.
+    ``document`` is a segment array, a ``{tracks: [...]}`` cutlist object, or
+    an already-parsed Timeline. Asset paths resolve against project_dir.
+    Each reference registers its own finite input (no -loop 1); still images
+    are materialized into finite clips by the caller before compile. A
+    HardwareProfile with a non-empty hw_chain appends upload nodes before the
+    encoder. ass_path, when set, burns the generated .ass last in the chain.
     """
-    assert isinstance(segments, list) and segments, "cutlist must be a non-empty array"
+    timeline = _resolve_timeline(document, audio)
     width, height = config["resolution"]
     fps = config["fps"]
-    duration = segments[-1]["end"]
+    easing = config.get("ken_burns_easing", "linear")
 
     inputs = []
     segment_inputs = {}
-    for i, seg in enumerate(segments):
-        if seg.get("asset") is None or seg.get("filter") == "white_flash":
-            segment_inputs[i] = None
-            continue
-        inputs.append(["-i", os.path.join(project_dir, seg["asset"])])
-        segment_inputs[i] = len(inputs) - 1
-
-    # Overlay assets (alpha layers, logos, rain) are additional inputs,
-    # one per reference: finite video only, no -loop 1, no split fan-out.
     overlay_inputs = {}
-    for i, seg in enumerate(segments):
-        for j, ov in enumerate(seg.get("overlays", [])):
-            inputs.append(["-i", os.path.join(project_dir, ov["asset"])])
-            overlay_inputs[(i, j)] = len(inputs) - 1
+    for t_index, track in enumerate(timeline.video):
+        for i, seg in enumerate(track.segments):
+            key = (t_index, i)
+            if _is_generated(seg):
+                segment_inputs[key] = None
+                continue
+            inputs.append(["-i", os.path.join(project_dir, seg["asset"])])
+            segment_inputs[key] = len(inputs) - 1
+            for j, ov in enumerate(seg.get("overlays", [])):
+                inputs.append(["-i", os.path.join(project_dir, ov["asset"])])
+                overlay_inputs[(t_index, i, j)] = len(inputs) - 1
 
     chains = []
-    easing = config.get("ken_burns_easing", "linear")
-    for i, seg in enumerate(segments):
+    base = timeline.base
+    for i, seg in enumerate(base.segments):
         asset = seg.get("asset")
-        if asset is None or seg.get("filter") == "white_flash":
-            chain = _segment_chain(None, seg, width, height, fps, easing)
-        else:
-            # theme defaults apply to asset segments lacking explicit values
+        if not _is_generated(seg):
             if seg.get("filter") is None and config.get("default_filter"):
                 seg = dict(seg, filter=config["default_filter"])
             if seg.get("effect") is None and config.get("default_effect"):
                 seg = dict(seg, effect=config["default_effect"])
-            label = f"[{segment_inputs[i]}:v]"
-            chain = _segment_chain(label, seg, width, height, fps, easing)
-        chains.append(f"{chain}[seg{i}]")
+            label = f"[{segment_inputs[(0, i)]}:v]"
+        else:
+            label = None
+        chains.append(f"{_segment_chain(label, seg, width, height, fps, easing)}[seg{i}]")
         for j, ov in enumerate(seg.get("overlays", [])):
-            ov_src = f"[{overlay_inputs[(i, j)]}:v]"
+            ov_src = f"[{overlay_inputs[(0, i, j)]}:v]"
             opacity = ov.get("opacity", 1.0)
             if opacity < 1.0:
                 prep_label = f"[ovp{i}_{j}]"
-                chains.append(f"{ov_src}format=rgba,colorchannelmixer=aa={_fmt(opacity)}{prep_label}")
+                chains.append(f"{ov_src}format=rgba,"
+                              f"colorchannelmixer=aa={_fmt(opacity)}{prep_label}")
                 ov_src = prep_label
             xexpr = _drift_expr(ov.get("x", 0), ov.get("dx", 0))
             yexpr = _drift_expr(ov.get("y", 0), ov.get("dy", 0))
             chains.append(f"[seg{i}]{ov_src}overlay=x='{xexpr}':y='{yexpr}'[seg{i}]")
 
-    transition_mode = config.get("transition_mode", "hard_cut")
-    if transition_mode != "hard_cut" and len(segments) > 1:
-        transition_d = config.get("transition_duration", 0.5)
-        duration = segments[-1]["end"] - (len(segments) - 1) * transition_d
-        t_chains, _ = _transition_chains(
-            segments, transition_mode, transition_d, width, height, fps)
+    boundaries = _boundary_transitions(base.segments, config, fps)
+    if boundaries:
+        t_chains, label, duration = _transition_chains(base.segments, boundaries)
         chains.extend(t_chains)
-        chains.append(f"[vcat]trim=duration={_fmt(duration)}[vfps]")
+        chains.append(f"{label}trim=duration={_fmt(duration)}[vfps]")
+        current = "[vfps]"
+    elif len(base.segments) == 1:
+        duration = base.segments[-1]["end"]
+        chains.append(f"[seg0]trim=duration={_fmt(duration)}[vfps]")
         current = "[vfps]"
     else:
-        if len(segments) == 1:
-            chains.append("[seg0]trim=duration={}[vfps]".format(_fmt(duration)))
-            current = "[vfps]"
-        else:
-            seg_labels = "".join(f"[seg{i}]" for i in range(len(segments)))
-            chains.append(f"{seg_labels}concat=n={len(segments)}:v=1:a=0[vcat]")
-            chains.append(f"[vcat]trim=duration={_fmt(duration)}[vfps]")
-            current = "[vfps]"
+        duration = base.segments[-1]["end"]
+        seg_labels = "".join(f"[seg{i}]" for i in range(len(base.segments)))
+        chains.append(f"{seg_labels}concat=n={len(base.segments)}:v=1:a=0[vcat]")
+        chains.append(f"[vcat]trim=duration={_fmt(duration)}[vfps]")
+        current = "[vfps]"
+
+    layered = False
+    for t_index, track in enumerate(timeline.video):
+        if track.base:
+            continue
+        for i, seg in enumerate(track.segments):
+            label = None
+            if not _is_generated(seg):
+                label = f"[{segment_inputs[(t_index, i)]}:v]"
+            chain = _segment_chain(label, seg, width, height, fps, easing,
+                                   alpha=True, track_scale=track.scale,
+                                   track_opacity=track.opacity)
+            seg_label = f"[ovt{t_index}_{i}]"
+            chains.append(f"{chain}{seg_label}")
+            shifted = f"[ovs{t_index}_{i}]"
+            chains.append(f"{seg_label}setpts=PTS+{_fmt(seg['start'])}/TB{shifted}")
+            x = track.x + seg.get("x", 0)
+            y = track.y + seg.get("y", 0)
+            out = f"[vl{t_index}_{i}]"
+            chains.append(
+                f"{current}{shifted}overlay=x={_fmt(x)}:y={_fmt(y)}"
+                f":eof_action=pass:enable='between(t,{_fmt(seg['start'])},"
+                f"{_fmt(seg['end'])})'{out}")
+            current = out
+            layered = True
+    if layered:
+        chains.append(f"{current}setsar=1[vbase]")
+        current = "[vbase]"
+
     lut = config.get("lut")
     if lut:
         lut_path = os.path.join(project_dir, lut)
-        chains.append(f"[vfps]lut3d=file={lut_path}:interp=tetrahedral[vlut]")
+        chains.append(f"{current}lut3d=file={lut_path}:interp=tetrahedral[vlut]")
         current = "[vlut]"
 
     if ass_path:
@@ -370,7 +566,8 @@ def compile_graph(config, segments, audio=None, project_dir=".", profile=None,
                              profile, chains)
 
     audio_chains, audio_maps = _audio_chains(
-        audio, duration, config, len(inputs), inputs, len(outputs))
+        timeline.audio, duration, config, len(inputs), inputs, len(outputs),
+        project_dir)
     chains.extend(audio_chains)
 
     return CompiledGraph(inputs, ";".join(chains), outputs, audio_maps, duration)

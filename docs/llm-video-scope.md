@@ -24,7 +24,7 @@ The user brings their own API key for any supported provider. scythe never broke
 Two natural seams:
 
 1. **Asset generation** - before ingest. Prompt -> clips into `raw_footage/`. The generated clips then flow through the existing `generate_cutlist.py` and render unchanged.
-2. **Cutlist generation** - the LLM cutlist step already exists as `prompts/brutalist-video-prompt.md` fed by hand to an LLM. It can become an API call with the same prompt text.
+2. **Cutlist generation** - the LLM cutlist step already exists as `prompts/video-prompt.md` fed by hand to an LLM. It can become an API call with the same prompt text.
 
 Seam 1 is the smallest useful slice and the recommended first phase.
 
@@ -57,7 +57,7 @@ Open-weights models (Wan 2.6, HunyuanVideo) run via aggregators (fal, Replicate)
 - Flat config keys: `ai_provider`, `ai_model`, `ai_prompt`, `ai_resolution`, `ai_duration`, `ai_count`. The API key is a provider-specific env var (BYOK), never in config.json.
 - `src/providers/` with a base interface: `generate(prompt, opts) -> local clip path`. MiniMax is the first implementation; every provider a user can bring a key for is additive.
 - `scripts/generate_clips.py <project-dir>`: prompt -> N generated clips -> `raw_footage/`. Generated clips are ordinary assets; the validation gate, `generate_cutlist.py` (which already clamps to probed clip durations), and the render pipeline consume them unchanged.
-- Phase 2 seam: a cutlist agent - one API call with `prompts/brutalist-video-prompt.md` plus the asset inventory, writing `cutlist.json`. Same prompt text, API-backed.
+- Phase 2 seam: a cutlist agent - one API call with `prompts/video-prompt.md` plus the asset inventory, writing `cutlist.json`. Same prompt text, API-backed.
 - Phase 3: additional providers behind the same interface, driven by what keys users actually have (Veo, Runway, Kling drop in as new implementations).
 
 ## Deliberate non-goals

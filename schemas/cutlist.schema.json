@@ -1,136 +1,140 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scythe/schemas/cutlist.schema.json",
-  "title": "scythe Cutlist",
-  "description": "JSON Schema for the scythe kinetic video cutlist. Validates segment structure, phase durations, filter adjacency, and filter-effect compatibility. Synchronized with main.py cutlist ingestion and filter-effect-matrix.json.",
-  "type": "array",
-  "minItems": 1,
-  "items": {
-    "type": "object",
-    "required": ["start", "end", "phase"],
-    "properties": {
-      "start": {
-        "type": "number",
-        "minimum": 0,
-        "description": "Start timestamp in seconds."
-      },
-      "end": {
-        "type": "number",
-        "description": "End timestamp in seconds. Must be > start."
-      },
-      "phase": {
-        "type": "string",
-        "enum": ["hook", "drop_transition", "kinetic_cut"],
-        "description": "Structural phase of the video."
-      },
-      "text": {
-        "type": ["string", "null"],
-        "description": "UPPERCASE overlay text, 2-5 words. Null for flash/strobe frames."
-      },
-      "asset": {
-        "type": ["string", "null"],
-        "description": "Relative path to source file from project root. Null for generated frames (e.g. white_flash segments)."
-      },
-      "filter": {
-        "type": ["string", "null"],
-        "enum": [
-          "grayscale",
-          "color_invert",
-          "high_contrast_green",
-          "high_contrast_red",
-          "white_flash",
-          "chromatic_aberration",
-          "film_grain",
-          "color_crush",
-          null
-        ],
-        "description": "Visual filter. Must be compatible with the segment's effect per filter-effect-matrix.json."
-      },
-      "effect": {
-        "type": ["string", "null"],
-        "enum": [
-          "ken_burns_slow",
-          "ken_burns_fast",
-          "snap_zoom",
-          "strobe",
-          "word_flash",
-          null
-        ],
-        "description": "Motion effect. No-op effects (strobe, word_flash) are valid with any filter including white_flash."
-      },
-      "clip_start": {
-        "type": "number",
-        "minimum": 0,
-        "default": 0,
-        "description": "Subclip start offset in seconds within the source asset. Omit or set to 0 to use the asset from its start."
-      },
-      "clip_end": {
-        "type": "number",
-        "description": "Subclip end offset in seconds within the source asset. Omit to auto-compute from segment duration."
-      },
-      "lower_third": {
-        "type": ["object", "null"],
-        "description": "Lower-third overlay with a title line and a subtitle line.",
-        "properties": {
-          "title": { "type": "string" },
-          "subtitle": { "type": "string" }
-        },
-        "required": ["title", "subtitle"]
-      },
-      "overlays": {
-        "type": "array",
-        "default": [],
-        "description": "Alpha layers composited over this segment: logos, scanlines, rain, skulls. Each is an input with optional position, drift, and opacity.",
-        "items": {
-          "type": "object",
-          "required": ["asset"],
-          "additionalProperties": false,
-          "properties": {
-            "asset": { "type": "string", "description": "Relative path to overlay media (RGBA image or video with alpha)." },
-            "x": { "type": "number", "default": 0, "description": "Horizontal position in px from the left edge." },
-            "y": { "type": "number", "default": 0, "description": "Vertical position in px from the top edge." },
-            "dx": { "type": "number", "default": 0, "description": "Horizontal drift in px/sec." },
-            "dy": { "type": "number", "default": 0, "description": "Vertical drift in px/sec." },
-            "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Opacity 0..1." }
-          }
-        }
-      }
-    }
-  },
-  "$comment": "Cross-field rules (end > start, timeline continuity, filter adjacency) are enforced by src/validator.py; JSON Schema cannot express cross-field comparisons.",
+  "title": "scythe cutlist",
+  "description": "A cutlist is either a segment array (one video track) or a document with tagged tracks. Style, structure and pacing are the author's choice: no phase vocabulary, casing rule, filter vocabulary or adjacency rule is enforced. Cross-field rules (end > start, base-track continuity, asset probing, resolvable filter/effect/transition names) live in src/validator.py because JSON Schema cannot express them.",
+
+  "oneOf": [
+    { "$ref": "#/$defs/segmentArray" },
+    { "$ref": "#/$defs/document" }
+  ],
 
   "$defs": {
-    "phaseDurationBounds": {
-      "hook":           { "minPerSegment": 1.0, "maxPerSegment": 1.5, "minTotal": 4.0, "maxTotal": 6.0 },
-      "drop_transition": { "minPerSegment": 0.3, "maxPerSegment": 0.8, "minTotal": 0,   "maxTotal": 999 },
-      "kinetic_cut":    { "minPerSegment": 0.3, "maxPerSegment": 0.8, "minTotal": 0,   "maxTotal": 999 }
+    "segmentArray": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/segment" }
     },
 
-    "validationRules": {
-      "noGaps": {
-        "description": "Segments must be contiguous: segment[i].end == segment[i+1].start for all i.",
-        "check": "forall i in 0..len-2: segments[i].end == segments[i+1].start"
-      },
-      "filterAdjacency": {
-        "description": "No two consecutive segments may use the same filter.",
-        "check": "forall i in 0..len-2: segments[i].filter != segments[i+1].filter"
-      },
-      "filterEffectCompatibility": {
-        "description": "If filter is 'white_flash', effect must be null or an identity effect (strobe, word_flash). Motion effects on white_flash are nonsensical.",
-        "check": "segment.filter == 'white_flash' → segment.effect in [null, 'strobe', 'word_flash']",
-        "reference": "schemas/filter-effect-matrix.json"
-      },
-      "textUppercase": {
-        "description": "All non-null text must be UPPERCASE, 2-5 words.",
-        "check": "segment.text == null or (segment.text == segment.text.toUpperCase() and 2 <= wordCount <= 5)"
-      },
-      "assetRequiredUnlessGenerated": {
-        "description": "asset must be non-null unless the segment is a generated frame (white_flash filter, or no filter with null asset).",
-        "check": "segment.asset != null or segment.filter == 'white_flash'"
-      },
-      "textNullOnFlash": {
-        "description": "Text should be null on white_flash segments.",
-        "check": "segment.filter == 'white_flash' → segment.text == null"
+    "document": {
+      "type": "object",
+      "required": ["tracks"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "integer", "minimum": 1, "default": 2 },
+        "tracks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "oneOf": [ { "$ref": "#/$defs/videoTrack" }, { "$ref": "#/$defs/audioTrack" } ] }
+        }
+      }
+    },
+
+    "videoTrack": {
+      "type": "object",
+      "required": ["kind", "segments"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "video" },
+        "id": { "type": "string" },
+        "segments": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/segment" } },
+        "x": { "type": "integer", "default": 0, "description": "Track offset in px from the left edge. Ignored on the base (first) track." },
+        "y": { "type": "integer", "default": 0, "description": "Track offset in px from the top edge. Ignored on the base (first) track." },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "Track scale against the canvas. 0.3 gives a picture-in-picture layer." },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0 }
+      }
+    },
+
+    "audioTrack": {
+      "type": "object",
+      "required": ["kind", "asset"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "audio" },
+        "id": { "type": "string" },
+        "asset": { "type": "string", "description": "Path to the audio file, relative to the project directory." },
+        "start": { "type": "number", "minimum": 0, "default": 0, "description": "Timeline position in seconds." },
+        "offset": { "type": "number", "minimum": 0, "default": 0, "description": "Source in-point in seconds." },
+        "duration": { "type": "number", "exclusiveMinimum": 0, "description": "Seconds taken from the source. Defaults to the rest of the timeline." },
+        "gain": { "type": "number", "minimum": 0, "default": 1.0 },
+        "fade_in": { "type": "number", "minimum": 0, "default": 0 },
+        "fade_out": { "type": "number", "minimum": 0, "default": 0 },
+        "duck_under": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Track ids this track is sidechain-compressed against, e.g. a music bed ducking under the voice track."
+        },
+        "cleanup": { "type": "boolean", "default": false, "description": "Enable denoise and noise gate. Effective only when voice_cleanup is on in the project config." }
+      }
+    },
+
+    "segment": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "number", "minimum": 0, "description": "Start on the timeline in seconds." },
+        "end": { "type": "number", "description": "End on the timeline in seconds. Must be greater than start." },
+        "asset": { "type": ["string", "null"], "description": "Source file relative to the project root. Null generates a solid frame from color." },
+        "color": { "type": "string", "description": "Solid frame color for a segment with no asset, as any ffmpeg color name or hex. Defaults to black, or white when filter is white_flash." },
+        "clip_start": { "type": "number", "minimum": 0, "default": 0, "description": "Source in-point in seconds." },
+        "clip_end": { "type": "number", "description": "Source out-point in seconds. Defaults to clip_start plus the segment duration times speed." },
+        "speed": { "type": "number", "exclusiveMinimum": 0, "default": 1.0, "description": "Playback rate. 0.5 is slow motion, 2 is double speed." },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "description": "Extra source scale before the canvas fit." },
+        "filter": { "type": ["string", "null"], "description": "Named filter from the registry, or 'raw:<libavfilter chain>' for anything else. The named set is grayscale, color_invert, color_crush, high_contrast_green, high_contrast_red, chromatic_aberration, film_grain, warm, cool, soft, white_flash." },
+        "effect": { "type": ["string", "null"], "description": "Named motion (ken_burns_slow, ken_burns_fast, snap_zoom, strobe, word_flash) or 'raw:<libavfilter chain>'. Cannot be combined with keyframes." },
+        "keyframes": {
+          "type": "array",
+          "description": "Keyframed camera: at is a fraction of the segment, so the cutlist survives a duration change. Overrides effect.",
+          "items": {
+            "type": "object",
+            "required": ["at"],
+            "additionalProperties": false,
+            "properties": {
+              "at": { "type": "number", "minimum": 0, "maximum": 1 },
+              "scale": { "type": "number", "exclusiveMinimum": 0 },
+              "x": { "type": "number", "description": "Pan offset in px from center." },
+              "y": { "type": "number", "description": "Pan offset in px from center." }
+            }
+          }
+        },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0, "description": "Static opacity. Applies to segments on overlay tracks." },
+        "fade_in": { "type": "number", "minimum": 0, "default": 0, "description": "Seconds. Fades from black on the base track, from transparent on an overlay track." },
+        "fade_out": { "type": "number", "minimum": 0, "default": 0 },
+        "x": { "type": "integer", "default": 0, "description": "Position override in px, added to the track offset." },
+        "y": { "type": "integer", "default": 0, "description": "Position override in px, added to the track offset." },
+        "transition": { "type": ["string", "null"], "description": "Transition into this segment: an alias (cross_dissolve, dip_to_black, dip_to_white, luma_wipe, slide_left, ...) or any xfade transition name. hard_cut snaps." },
+        "transition_duration": { "type": "number", "exclusiveMinimum": 0, "description": "Seconds. Defaults to the project transition_duration." },
+        "text": { "type": ["string", "null"], "description": "Burned caption. Wording, casing and length are the author's call." },
+        "phase": { "type": ["string", "null"], "description": "Free-form label for your own structure. Not interpreted by the engine." },
+        "lower_third": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "title": { "type": "string" },
+            "subtitle": { "type": "string" }
+          },
+          "required": ["title", "subtitle"]
+        },
+        "overlays": {
+          "type": "array",
+          "default": [],
+          "description": "Alpha layers composited over this segment: logos, textures, grain, PiP frames.",
+          "items": {
+            "type": "object",
+            "required": ["asset"],
+            "additionalProperties": false,
+            "properties": {
+              "asset": { "type": "string" },
+              "x": { "type": "number", "default": 0 },
+              "y": { "type": "number", "default": 0 },
+              "dx": { "type": "number", "default": 0 },
+              "dy": { "type": "number", "default": 0 },
+              "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1 }
+            }
+          }
+        }
       }
     }
   }

@@ -1,9 +1,9 @@
-"""Verification gate tests (render-performance CP-4).
+"""Verification gate tests.
 
 The gate runs after a render, before the tmp output is renamed into place:
-container duration must equal the cutlist span within one frame, the video
-frame count must equal duration * fps, and adjacent cutlist segments must
-sample to different frame fingerprints (no frozen picture).
+container duration must equal the timeline span within one frame, the video
+frame count must equal duration * fps, and adjacent segments that draw from
+different sources must not sample to the same frame (no frozen picture).
 """
 
 import json
@@ -92,14 +92,24 @@ class VerifyTests(unittest.TestCase):
 
     def test_frozen_picture_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
-            media = _make_media(tmp, 2.0, color="black")  # all frames identical
+            media = _make_media(tmp, 2.0, color="black")
             segments = [
-                {"start": 0.0, "end": 1.0, "phase": "hook", "text": None},
-                {"start": 1.0, "end": 2.0, "phase": "hook", "text": None},
+                {"start": 0.0, "end": 1.0, "color": "black"},
+                {"start": 1.0, "end": 2.0, "color": "red"},
             ]
             with self.assertRaises(VerificationError) as ctx:
                 verify(media, segments, 15)
             self.assertIn("freeze", str(ctx.exception).lower())
+
+    def test_repeated_source_is_not_a_freeze(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = _make_media(tmp, 2.0, color="black")
+            segments = [
+                {"start": 0.0, "end": 1.0, "asset": "raw/a.mp4", "clip_start": 0},
+                {"start": 1.0, "end": 2.0, "asset": "raw/a.mp4", "clip_start": 0},
+            ]
+            report = verify(media, segments, 15)
+            self.assertEqual(report["frame_count"], 30)
 
 
 if __name__ == "__main__":

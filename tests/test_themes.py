@@ -90,12 +90,25 @@ class ThemeIntegrationTests(unittest.TestCase):
             graph = compile_graph(config, segments, None, tmp)
             self.assertIn("hue=s=0", graph.filter_complex)  # theme default filter
 
-    def test_brutalist_parity(self):
+    def test_brutalist_theme_is_opt_in(self):
         base = compile_graph(BASE_CONFIG, SEGMENTS, AUDIO, ".")
         themed_config = dict(BASE_CONFIG)
         themed_config.update(load_theme("brutalist"))
         themed = compile_graph(themed_config, SEGMENTS, AUDIO, ".")
-        self.assertEqual(base.filter_complex, themed.filter_complex)
+        self.assertNotEqual(base.filter_complex, themed.filter_complex)
+        self.assertLess(base.filter_complex.count("hue=s=0"),
+                        themed.filter_complex.count("hue=s=0"))
+
+    def test_theme_values_are_real_not_empty(self):
+        brute = load_theme("brutalist")
+        self.assertTrue(brute)
+        self.assertEqual(brute["font"], "LiberationSerif-Bold")
+        self.assertEqual(brute["transition_mode"], "hard_cut")
+
+    def test_theme_can_carry_eval_thresholds(self):
+        keys = set(__import__("src.themes", fromlist=["THEME_KEYS"]).THEME_KEYS)
+        self.assertIn("eval_lufs_tolerance", keys)
+        self.assertIn("eval_true_peak_max", keys)
 
     def test_lut_node_in_graph(self):
         config = dict(BASE_CONFIG, lut="grade/teal.cube")
@@ -132,7 +145,7 @@ class ThemeIntegrationTests(unittest.TestCase):
                 cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=120,
             )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("schema", result.stdout.lower())
+        self.assertIn("unknown filter", result.stdout.lower())
 
 
 SEGMENTS_3 = [
@@ -171,8 +184,12 @@ class TransitionTests(unittest.TestCase):
     def test_luma_wipe(self):
         config = dict(BASE_CONFIG, transition_mode="luma_wipe")
         graph = compile_graph(config, SEGMENTS, AUDIO, ".")
-        self.assertIn("transition=luma", graph.filter_complex)
-        self.assertIn("geq=", graph.filter_complex)
+        self.assertIn("transition=hlslice", graph.filter_complex)
+
+    def test_raw_xfade_name_accepted(self):
+        config = dict(BASE_CONFIG, transition_mode="squeezev")
+        graph = compile_graph(config, SEGMENTS, AUDIO, ".")
+        self.assertIn("transition=squeezev", graph.filter_complex)
 
     def test_multi_xfade_offsets(self):
         config = dict(BASE_CONFIG, transition_mode="cross_dissolve",

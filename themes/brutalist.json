@@ -1,1 +1,14 @@
-{}
+{
+  "font": "LiberationSerif-Bold",
+  "font_size": 72,
+  "stroke_width": 4,
+  "text_color": "white",
+  "stroke_color": "black",
+  "default_filter": "grayscale",
+  "default_effect": null,
+  "transition_mode": "hard_cut",
+  "transition_duration": 0.1,
+  "ken_burns_easing": "linear",
+  "safe_zone_bottom": 0.18,
+  "lufs_target": -14
+}

@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
-# Master ingestion orchestrator — fetches all assets into a project.
-# Usage: ./ingest.sh <project-dir> [--audio-query "query"] [--ia-id "identifier"] [--image-cat "url"]
-#
-# Examples:
-#   ./ingest.sh projects/my-video
-#   ./ingest.sh projects/my-video --audio-query "dark industrial phonk 140bpm"
-#   ./ingest.sh projects/my-video --ia-id Cabiria_1914 --no-images
-#   ./ingest.sh projects/my-video --no-audio --no-video
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# ── Defaults ──
 AUDIO_QUERY="royalty free aggressive drill beat phonk"
 IA_ID="Scipione_l_africano_1937"
 IMAGE_CAT="https://commons.wikimedia.org/wiki/Category:Ancient_Roman_statues_in_the_Louvre"
@@ -21,7 +12,6 @@ FETCH_VIDEO=true
 FETCH_IMAGES=true
 PREPROCESS=true
 
-# ── Parse args ──
 PROJECT=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -55,7 +45,6 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-# ── Scaffold if missing ──
 if [ ! -d "$PROJECT" ]; then
     echo "=== Project not found, scaffolding from template ==="
     "$SCRIPT_DIR/bootstrap.sh" "$(basename "$PROJECT")"
@@ -71,25 +60,21 @@ echo "  Preproc: $PREPROCESS"
 echo "============================================"
 echo ""
 
-# ── Fetch audio ──
 if $FETCH_AUDIO; then
     "$SCRIPT_DIR/scripts/fetch_audio.sh" "$PROJECT/audio" "$AUDIO_QUERY"
     echo ""
 fi
 
-# ── Fetch video ──
 if $FETCH_VIDEO; then
     "$SCRIPT_DIR/scripts/fetch_video.sh" "$PROJECT/raw_footage" "$IA_ID"
     echo ""
 fi
 
-# ── Fetch images ──
 if $FETCH_IMAGES; then
     "$SCRIPT_DIR/scripts/fetch_images.sh" "$PROJECT/overlays" "$IMAGE_CAT"
     echo ""
 fi
 
-# ── Preprocess (monochrome crush) ──
 if $PREPROCESS; then
     if [ -d "$PROJECT/raw_footage" ] && ls "$PROJECT/raw_footage"/*.mp4 &>/dev/null; then
         "$SCRIPT_DIR/scripts/preprocess.sh" "$PROJECT/raw_footage"
@@ -108,5 +93,6 @@ echo "  $(find "$PROJECT/audio" -type f 2>/dev/null | wc -l) audio files"
 echo "  $(find "$PROJECT/raw_footage" -type f 2>/dev/null | wc -l) raw footage files"
 echo "  $(find "$PROJECT/overlays" -type f -not -name '.gitkeep' 2>/dev/null | wc -l) overlay files"
 echo ""
-echo "Next: generate cutlist → feed prompts/brutalist-video-prompt.md to an LLM"
-echo "Then: render           → ./render.sh $PROJECT"
+echo "Next: cutlist          -> python3 scripts/generate_cutlist.py $PROJECT"
+echo "     or feed prompts/video-prompt.md to an LLM"
+echo "Then: render           -> ./render.sh $PROJECT"

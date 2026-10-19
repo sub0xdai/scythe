@@ -1,6 +1,4 @@
 {
   "preset": "widescreen",
-  "audio_offset": 0,
-  "font": "LiberationSerif-Bold",
-  "font_size": 72
+  "audio_offset": 0
 }

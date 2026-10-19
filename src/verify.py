@@ -1,19 +1,22 @@
-"""Post-render verification gate (render-performance CP-4).
+"""Post-render verification gate.
 
 Runs after a render on the tmp output, before it is renamed into place:
-- container duration must equal the cutlist span within one frame
+- container duration must equal the timeline span within one frame
 - video frame count must equal duration * fps
-- the picture must be live: adjacent cutlist segment midpoints sample to
-  different frame fingerprints (a frozen picture repeats one frame)
+- the picture must be live: midpoints of adjacent segments that draw from
+  different sources must not sample to the same frame fingerprint
 
-Any violation raises VerificationError with a named message; the caller
-deletes the tmp output and does not rename it.
+A repeated frame is only a failure when the two segments actually differ in
+source (asset, in-point or generated color). A still card held across cuts,
+or the same clip used twice, is a legitimate editorial choice and is not
+flagged. Any violation raises VerificationError; the caller deletes the tmp
+output and does not rename it.
 """
 
 import hashlib
 import subprocess
 
-FRAME_EPSILON = 1.0 / 15.0  # one frame at the minimum supported fps
+FRAME_EPSILON = 1.0 / 15.0
 
 
 class VerificationError(Exception):
@@ -49,13 +52,28 @@ def fingerprint_at(path, t):
     return hashlib.sha256(result.stdout).hexdigest()
 
 
-def verify(path, segments, fps, span=None):
-    """Verify duration, frame count, and liveness. Returns a report dict.
+def source_key(seg):
+    """Identity of what a segment draws. Equal keys may legitimately match."""
+    asset = seg.get("asset")
+    if asset is None or seg.get("filter") == "white_flash":
+        return ("generated", seg.get("color"), seg.get("filter") == "white_flash")
+    return ("asset", asset, seg.get("clip_start", 0))
 
-    span defaults to the cutlist's last end; pass the transition-adjusted
+
+def _segments_of(timeline_or_segments):
+    if isinstance(timeline_or_segments, list):
+        return timeline_or_segments
+    return timeline_or_segments.base.segments
+
+
+def verify(path, timeline_or_segments, fps, span=None):
+    """Verify duration, frame count and liveness. Returns a report dict.
+
+    span defaults to the timeline's last end; pass the transition-adjusted
     duration explicitly when the timeline uses transitions (xfade shortens
     the output below the raw span).
     """
+    segments = _segments_of(timeline_or_segments)
     if span is None:
         span = segments[-1]["end"]
     expected_frames = round(span * fps)
@@ -72,10 +90,16 @@ def verify(path, segments, fps, span=None):
             f"(round({span:.3f}s * {fps}fps)), got {frame_count}")
 
     fingerprints = []
+    keys = []
     for i, seg in enumerate(segments):
         midpoint = (seg["start"] + seg["end"]) / 2
         fingerprints.append(fingerprint_at(path, midpoint))
-        if i > 0 and fingerprints[i] == fingerprints[i - 1]:
+        keys.append(source_key(seg))
+        if i == 0:
+            continue
+        if keys[i] == keys[i - 1] and not _has_motion(seg):
+            continue
+        if fingerprints[i] == fingerprints[i - 1]:
             raise VerificationError(
                 f"freeze detected: segments {i - 1} and {i} sample to the "
                 f"same frame at their midpoints")
@@ -85,3 +109,9 @@ def verify(path, segments, fps, span=None):
         "frame_count": frame_count,
         "fingerprints": fingerprints,
     }
+
+
+def _has_motion(seg):
+    if seg.get("keyframes"):
+        return len(seg["keyframes"]) > 1
+    return seg.get("effect") not in (None, "strobe", "word_flash")

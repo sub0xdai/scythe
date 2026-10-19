@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Bootstrap a new kinetic content project from the scaffold template.
-# Usage: ./bootstrap.sh <project-name>
-#   ./bootstrap.sh my-video   →  creates projects/my-video/
 
 set -euo pipefail
 
@@ -30,5 +27,7 @@ echo ""
 echo "Next steps:"
 echo "  1. Add audio:       cp ~/Downloads/track.wav $NAME/audio/"
 echo "  2. Add footage:     cp ~/captures/*.mp4 $NAME/raw_footage/"
-echo "  3. Generate cutlist: feed prompts/brutalist-video-prompt.md to an LLM, save as projects/$NAME/prompts/cutlist.json"
-echo "  4. Render:          python main.py --project projects/$NAME"
+echo "  3. Cutlist:         python3 scripts/generate_cutlist.py projects/$NAME"
+echo "     or feed prompts/video-prompt.md to an LLM and save the JSON"
+echo "     as projects/$NAME/prompts/cutlist.json"
+echo "  4. Render:          ./render.sh projects/$NAME"

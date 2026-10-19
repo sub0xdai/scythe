@@ -60,17 +60,30 @@ class TimelineRuleTests(unittest.TestCase):
         segments[1]["start"] = 1.0001
         self.assertEqual(validate(segments, "."), [])
 
-    def test_adjacent_same_filter_flagged(self):
+    def test_repeated_filter_is_allowed(self):
         segments = _valid_segments()
-        segments[2].update(filter="white_flash", effect="strobe", text=None)
+        segments[2].update(filter="grayscale", effect="ken_burns_fast")
         violations = validate(segments, ".")
-        self.assertTrue(any(v.rule == "filter_adjacency" for v in violations))
+        self.assertFalse(any(v.rule == "filter_adjacency" for v in violations))
 
     def test_unknown_filter_flagged(self):
         segments = _valid_segments()
         segments[0]["filter"] = "sepia"
         violations = validate(segments, ".")
-        self.assertEqual(violations[0].rule, "schema")
+        self.assertEqual(violations[0].rule, "unknown_name")
+        self.assertIn("sepia", violations[0].message)
+
+    def test_raw_filter_accepted(self):
+        segments = _valid_segments()
+        segments[0]["filter"] = "raw:eq=contrast=1.2:saturation=0.8"
+        violations = validate(segments, ".")
+        self.assertEqual(violations, [])
+
+    def test_free_text_accepted(self):
+        segments = _valid_segments()
+        segments[0]["text"] = "a longer sentence in lower case, no word limit"
+        violations = validate(segments, ".")
+        self.assertEqual(violations, [])
 
 
 class AssetRuleTests(unittest.TestCase):

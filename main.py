@@ -1,23 +1,26 @@
 """
-Scythe - kinetic video rendering engine - project-aware entry point.
+Scythe - a content and video editing engine driven by a JSON cutlist.
 
-Drop videos + images + audio into a project, define a cut-list, get an MP4.
+Drop footage, images and audio into a project, describe the edit as a
+cutlist, get MP4s. One ffmpeg filtergraph per pass, no frame loops.
 
 Two modes:
-  1. Cut-list mode:  python main.py --project projects/my-video
+  1. Cutlist mode:  python main.py --project projects/my-video
      Reads config.json (style) + prompts/cutlist.json (timeline).
-     Compiles one ffmpeg filtergraph and renders in a single pass.
-  2. Beat-detect mode:  python main.py --audio audio/track.wav --assets video_assets/ --out output.mp4
-     Legacy librosa beat-sync, no voiceover.
+     The cutlist is either a segment array or a track document.
+  2. Beat-detect mode:  python main.py --audio track.wav --assets dir --out out.mp4
+     Legacy librosa beat sync.
 
 Project directory structure:
   project/
-  ├── config.json      # Style: resolution, font, audio offset (optional)
-  ├── audio/           # soundtrack.mp3 + voiceover.wav (auto-detected)
-  ├── prompts/         # cutlist.json (generated via LLM prompt)
-  ├── raw_footage/     # Video clips + images
-  ├── overlays/        # Logos, textures, grids, grain
-  └── output/          # master.mp4 + web.mp4 (+ subtitles.ass)
+  |-- config.json      # Style: resolution, font, transitions, loudness
+  |-- audio/           # soundtrack + voiceover (auto-detected when the
+  |                    # cutlist declares no audio tracks)
+  |-- prompts/         # cutlist.json
+  |-- raw_footage/     # Video clips and images
+  |-- overlays/        # Logos, textures, grids, grain
+  |-- output/          # one MP4 per configured output + subtitles.ass
+  `-- project.md       # append-only render history
 """
 
 import argparse
@@ -27,7 +30,8 @@ import shutil
 import subprocess
 import sys
 
-from src.compiler import AudioSpec, compile_graph, snap_timeline
+from src import eval as evaluation
+from src.compiler import AudioSpec, compile_graph, snap_tracks
 from src.compiler.text import build_ass
 from src.gpu import (
     CPU_PROFILE,
@@ -37,12 +41,23 @@ from src.gpu import (
     profile_for,
     quality_for,
 )
+from src.memory import record as record_memory
 from src.telemetry import ProgressParser
 from src.themes import ThemeError, load_theme
+from src.tracks import (
+    Timeline,
+    TimelineError,
+    VideoTrack,
+    audio_spec_to_tracks,
+    parse_document,
+)
 from src.validator import validate
 from src.verify import VerificationError, verify
 
-MACHINE = False  # JSON events are the only stdout content in machine mode
+MACHINE = False
+EVALUATE = True
+STRICT = False
+NOTE = None
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 
@@ -51,16 +66,18 @@ def _materialize_stills(segments, project_dir, fps, out_dir):
     """One finite clip per image reference; rewrite the asset path in place.
 
     Images are single frames; without -loop 1 they cannot carry a segment's
-    duration, and -loop 1 in the render graph is the unbounded-queue source
-    (issues.md #12/#17). Materialize each image reference to a finite clip of
-    exactly the snapped segment span, then let the compiler open it as plain
-    video. Returns the created clip paths for cleanup.
+    duration, and -loop 1 in the render graph is an unbounded-queue source.
+    Materialize each image reference to a finite clip of exactly the snapped
+    segment span, then let the compiler open it as plain video. Speed is
+    applied later by setpts, so the clip carries the source span instead.
+    Returns the created clip paths for cleanup.
     """
     os.makedirs(out_dir, exist_ok=True)
     created = []
     counter = 0
     for seg in segments:
-        duration = seg["end"] - seg["start"]
+        speed = seg["speed"] if seg.get("speed") is not None else 1.0
+        span = (seg["end"] - seg["start"]) * float(speed)
         refs = []
         if seg.get("asset") and os.path.splitext(seg["asset"])[1].lower() in IMAGE_EXTS:
             refs.append((seg, "asset"))
@@ -71,7 +88,7 @@ def _materialize_stills(segments, project_dir, fps, out_dir):
             full = os.path.join(project_dir, holder[key])
             clip = os.path.join(out_dir, f"clip_{counter}.mp4")
             cmd = ["ffmpeg", "-y", "-loop", "1", "-framerate", str(fps),
-                   "-i", full, "-t", f"{duration:g}", "-r", str(fps),
+                   "-i", full, "-t", f"{span:g}", "-r", str(fps),
                    "-pix_fmt", "yuv420p", clip]
             subprocess.run(cmd, check=True, capture_output=True)
             holder[key] = os.path.relpath(clip, project_dir)
@@ -110,13 +127,43 @@ def _tmp_path(out_path):
     return out_path[:-4] + ".tmp.mp4"
 
 
-def _run_render(cmd, duration, output_paths, segments=None, fps=None):
+def _evaluate(path, config, has_audio):
+    """Measure one rendered file; report every finding."""
+    if not EVALUATE:
+        return []
+    findings = evaluation.evaluate(path, config, has_audio=has_audio)
+    if STRICT:
+        findings = evaluation.promote(findings)
+    for finding in findings:
+        log(f"  {finding.severity.upper()} [{finding.rule}] {finding.message}")
+    return findings
+
+
+def _gate(path, timeline, fps, duration, config, has_audio):
+    """Verify structure and evaluate the mix. Fails loudly, returns findings."""
+    try:
+        verify(path, timeline, fps, span=duration)
+    except VerificationError as e:
+        if os.path.exists(path):
+            os.remove(path)
+        _fail(f"Render failed verification: {e}")
+    findings = _evaluate(path, config, has_audio)
+    blocking = evaluation.blocking(findings)
+    if blocking:
+        if os.path.exists(path):
+            os.remove(path)
+        _fail("Render failed evaluation: "
+              + "; ".join(f"[{f.rule}] {f.message}" for f in blocking))
+    return findings
+
+
+def _run_render(cmd, duration, output_paths, timeline=None, fps=None,
+                config=None, has_audio=False):
     """Run ffmpeg with -progress pipe:1, streaming telemetry events.
 
-    Outputs are written to <name>.tmp.mp4 and verified before the atomic
-    rename: duration must match the cutlist span, frame count must be
-    exact, and the picture must be live. A failed gate deletes the tmp
-    output and aborts without renaming.
+    Outputs are written to <name>.tmp.mp4 and only renamed after the gate
+    passes: duration drift, a wrong frame count, a frozen picture, a mix
+    off the loudness target or a clipping peak all leave the old file alone.
     """
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -127,30 +174,25 @@ def _run_render(cmd, duration, output_paths, segments=None, fps=None):
     proc.wait()
     if proc.returncode != 0:
         _fail(f"FFmpeg failed:\n{stderr[-4000:]}", code=proc.returncode)
-    if segments is not None and fps is not None:
+    findings = []
+    if timeline is not None and fps is not None:
         for out_path in output_paths:
-            tmp = _tmp_path(out_path)
-            try:
-                verify(tmp, segments, fps, span=duration)
-            except VerificationError as e:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-                _fail(f"Render failed verification: {e}")
+            findings += _gate(_tmp_path(out_path), timeline, fps, duration,
+                              config or {}, has_audio)
     for out_path in output_paths:
         os.replace(_tmp_path(out_path), out_path)
     if MACHINE:
         _json_event({"type": "done"})
-    log(f"Done → {', '.join(output_paths)}")
+    log(f"Done -> {', '.join(output_paths)}")
+    return findings
 
-
-# ── Defaults ──────────────────────────────────────────────────────────────
 
 DEFAULTS = {
-    "resolution": [1920, 1080],   # width, height (16:9 desktop default)
+    "resolution": [1920, 1080],
     "fps": 30,
-    "font": "LiberationSerif-Bold",
-    "font_size": 72,
-    "stroke_width": 4,
+    "font": "LiberationSans",
+    "font_size": 64,
+    "stroke_width": 2,
     "stroke_color": "black",
     "text_color": "white",
     "audio_offset": 0.0,
@@ -175,18 +217,18 @@ DEFAULTS = {
     ],
 }
 
-# Presets for common formats
 PRESETS = {
-    "vertical":    {"resolution": [1080, 1920]},
-    "widescreen":  {"resolution": [1920, 1080]},
-    "square":      {"resolution": [1080, 1080]},
-    "story":       {"resolution": [1080, 1920], "font": "LiberationSans-Bold", "font_size": 52},
-    "cinematic":   {"resolution": [1920, 1080], "font": "LiberationSerif-Bold", "font_size": 90},
+    "widescreen": {"resolution": [1920, 1080]},
+    "vertical": {"resolution": [1080, 1920]},
+    "square": {"resolution": [1080, 1080]},
+    "story": {"resolution": [1080, 1920]},
+    "cinematic": {"resolution": [1920, 1080]},
+    "4k": {"resolution": [3840, 2160]},
 }
 
 
 def load_config(project_dir, cli_overrides=None):
-    """Merge DEFAULTS <- theme <- config.json <- CLI overrides."""
+    """Merge DEFAULTS <- theme <- preset <- config.json <- CLI overrides."""
     config = dict(DEFAULTS)
 
     config_path = os.path.join(project_dir, "config.json")
@@ -195,7 +237,6 @@ def load_config(project_dir, cli_overrides=None):
         with open(config_path) as f:
             project_config = json.load(f)
 
-    # Theme layer: explicit project config beats theme defaults
     theme_ref = project_config.get("theme")
     if theme_ref:
         try:
@@ -204,21 +245,21 @@ def load_config(project_dir, cli_overrides=None):
             log(f"ERROR: {e}")
             sys.exit(1)
 
-    # Apply preset if specified
     preset_name = project_config.pop("preset", None)
-    if preset_name and preset_name in PRESETS:
+    if preset_name:
+        if preset_name not in PRESETS:
+            log(f"ERROR: unknown preset '{preset_name}'; "
+                f"available: {', '.join(sorted(PRESETS))}")
+            sys.exit(1)
         config.update(PRESETS[preset_name])
 
     config.update(project_config)
 
-    # CLI overrides take highest priority
     if cli_overrides:
         config.update({k: v for k, v in cli_overrides.items() if v is not None})
 
     return config
 
-
-# ── Audio ─────────────────────────────────────────────────────────────────
 
 def _has_audio_stream(path):
     """True when ffprobe finds an audio stream (content, not extension)."""
@@ -231,7 +272,11 @@ def _has_audio_stream(path):
 
 
 def _detect_audio(project_dir):
-    """Resolve soundtrack/voiceover from audio/ per the naming convention."""
+    """Resolve soundtrack/voiceover from audio/ per the naming convention.
+
+    Only used when the cutlist declares no audio tracks. The voice file is
+    gated and denoised, and the soundtrack ducks under it.
+    """
     audio_dir = os.path.join(project_dir, "audio")
     if not os.path.isdir(audio_dir):
         log("  WARNING: no audio/ directory, output will be silent")
@@ -334,15 +379,39 @@ def check_gpu():
     sys.exit(0 if dry_run_ok else 1)
 
 
-# ── Cut-List Mode ─────────────────────────────────────────────────────────
+def _load_timeline(project_dir, config):
+    """Validate and parse the cutlist document into a snapped Timeline."""
+    cutlist_path = os.path.join(project_dir, "prompts", "cutlist.json")
+    if not os.path.exists(cutlist_path):
+        _fail(f"ERROR: No cutlist found at {cutlist_path}\n"
+              "Feed prompts/video-prompt.md to an LLM, or run "
+              "scripts/generate_cutlist.py, to produce one.")
+
+    with open(cutlist_path) as f:
+        document = json.load(f)
+
+    violations = validate(document, project_dir, config)
+    if violations:
+        log("Cutlist validation failed:")
+        for v in violations:
+            idx = f"segment {v.segment_index}: " if v.segment_index is not None else ""
+            log(f"  - [{v.rule}] {idx}{v.message}")
+        log(f"  ({len(violations)} violation(s))")
+        sys.exit(1)
+
+    try:
+        timeline = parse_document(document)
+    except TimelineError as e:
+        _fail(f"ERROR: {e}")
+    return snap_tracks(timeline, config["fps"])
+
 
 def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=None,
                           font=None, font_size=None, stroke_width=None,
                           stroke_color=None, text_color=None):
-    """Read cutlist.json and config.json, render the full video in one ffmpeg pass."""
+    """Read cutlist.json and config.json, render every output in one pass."""
     project_dir = os.path.abspath(project_dir)
 
-    # Load config
     config = load_config(project_dir, {
         "audio_offset": audio_offset,
         "resolution": resolution,
@@ -353,61 +422,66 @@ def generate_from_cutlist(project_dir, audio_offset=None, resolution=None, fps=N
         "stroke_color": stroke_color,
         "text_color": text_color,
     })
-
     target_size = tuple(config["resolution"])
-
-    # Load cutlist
-    cutlist_path = os.path.join(project_dir, "prompts", "cutlist.json")
-    if not os.path.exists(cutlist_path):
-        log(f"ERROR: No cutlist found at {cutlist_path}")
-        log("Feed prompts/brutalist-video-prompt.md to an LLM to generate one.")
-        sys.exit(1)
-
-    with open(cutlist_path) as f:
-        segments = json.load(f)
-
-    violations = validate(segments, project_dir, config)
-    if violations:
-        log("Cutlist validation failed:")
-        for v in violations:
-            idx = f"segment {v.segment_index}: " if v.segment_index is not None else ""
-            log(f"  - [{v.rule}] {idx}{v.message}")
-        log(f"  ({len(violations)} violation(s))")
-        sys.exit(1)
-
-    segments = snap_timeline(segments, config["fps"])
+    timeline = _load_timeline(project_dir, config)
 
     output_dir = os.path.join(project_dir, "output")
     os.makedirs(output_dir, exist_ok=True)
 
     log(f"Project:  {project_dir}")
-    log(f"Config:   {target_size[0]}×{target_size[1]} @ {config['fps']}fps | {config['font']} {config['font_size']}px")
+    log(f"Config:   {target_size[0]}x{target_size[1]} @ {config['fps']}fps | "
+        f"{config['font']} {config['font_size']}px")
     log(f"Outputs:  {', '.join(o['name'] + '.mp4' for o in config['outputs'])}")
-    log(f"Segments: {len(segments)}")
-    log("─" * 50)
+    log(f"Timeline: {timeline.duration:.2f}s, {len(timeline.video)} video "
+        f"track(s), {len(timeline.base.segments)} base segment(s)")
+    log("-" * 50)
 
-    log("Detecting audio...")
-    audio = _detect_audio(project_dir)
-    if audio is None:
-        log("  → No audio, output will be silent")
+    audio = None
+    if timeline.audio:
+        log("Audio tracks from cutlist:")
+        for track in timeline.audio:
+            log(f"  {track.id}: {os.path.basename(track.asset)}")
+    else:
+        log("Detecting audio...")
+        spec = _detect_audio(project_dir)
+        if spec is None:
+            log("  -> No audio, output will be silent")
+        else:
+            timeline = Timeline(video=list(timeline.video),
+                                audio=audio_spec_to_tracks(spec),
+                                duration=timeline.duration)
     if config["audio_offset"]:
         log(f"  Offset:   {config['audio_offset']:.1f}s")
 
-    materialized = _materialize_stills(
-        segments, project_dir, config["fps"],
-        os.path.join(output_dir, ".materialized"))
+    mat_dir = os.path.join(output_dir, ".materialized")
+    materialized = []
+    for track in timeline.video:
+        materialized += _materialize_stills(
+            track.segments, project_dir, config["fps"], mat_dir)
     if materialized:
         log(f"  Materialized: {len(materialized)} still clip(s)")
 
     try:
-        _render_project(project_dir, config, segments, audio, output_dir)
+        findings = _render_project(project_dir, config, timeline, output_dir)
     finally:
         for clip in materialized:
             if os.path.exists(clip):
                 os.remove(clip)
-        mat_dir = os.path.join(output_dir, ".materialized")
         if os.path.isdir(mat_dir) and not os.listdir(mat_dir):
             os.rmdir(mat_dir)
+
+    outputs_cfg = config.get("outputs") or [{"name": "render"}]
+    paths = [os.path.join(output_dir, f"{o['name']}.mp4") for o in outputs_cfg]
+    log_path = record_memory(
+        project_dir,
+        outputs=paths,
+        duration=timeline.duration,
+        timeline=timeline,
+        config=config,
+        findings=findings,
+        note=NOTE,
+    )
+    log(f"Project log: {log_path}")
 
 
 def _chunk_segments(segments, max_per_chunk):
@@ -441,16 +515,20 @@ def _render_chunk(project_dir, config, chunk, profile, chunk_dir, k):
     return paths
 
 
-def _render_audio(project_dir, config, audio, duration, profile, out_path):
-    """Master the full audio mix once (loudnorm, ducking) to out_path."""
-    cover = [{"start": 0.0, "end": duration, "phase": "hook", "text": None,
-              "asset": None, "filter": "white_flash", "effect": None}]
-    graph = compile_graph(config, cover, audio, project_dir, profile, None)
+def _render_audio(project_dir, config, timeline, duration, profile, out_path):
+    """Master the full audio mix once (loudness, ducking) to out_path."""
+    cover_segment = {"start": 0.0, "end": duration, "asset": None,
+                     "color": "black"}
+    cover_track = VideoTrack(id="cover", segments=[cover_segment], base=True)
+    cover = Timeline(video=[cover_track], audio=list(timeline.audio),
+                     duration=duration)
+    audio_config = dict(config, outputs=[])
+    graph = compile_graph(audio_config, cover, None, project_dir, profile, None)
     cmd = ["ffmpeg", "-y", *profile.extra_args]
     for arg_list in graph.input_args:
         cmd.extend(arg_list)
     cmd += ["-filter_complex", graph.filter_complex]
-    cmd += ["-map", "[vfps]", "-f", "null", "-"]
+    cmd += ["-map", graph.outputs[0].label, "-f", "null", "-"]
     cmd += ["-map", graph.audio_maps[0], "-c:a", "aac", "-b:a", "192k", out_path]
     subprocess.run(cmd, check=True, capture_output=True, timeout=3600)
 
@@ -467,13 +545,23 @@ def _concat_chunks(chunk_paths, out_path):
     os.remove(list_path)
 
 
-def _render_chunked(project_dir, config, segments, audio, output_dir, profile):
+def _single_track(timeline, segments):
+    track = VideoTrack(id=timeline.base.id, segments=segments,
+                       x=timeline.base.x, y=timeline.base.y,
+                       scale=timeline.base.scale, base=True)
+    return Timeline(video=[track], audio=list(timeline.audio),
+                    duration=segments[-1]["end"])
+
+
+def _render_chunked(project_dir, config, timeline, output_dir, profile):
     """Chunked render: per-chunk video passes, stream-copy concat, one audio pass."""
-    chunks = _chunk_segments(segments, config["max_segments_per_chunk"])
+    chunks = _chunk_segments(timeline.base.segments,
+                             config["max_segments_per_chunk"])
     chunk_dir = os.path.join(output_dir, ".chunks")
     os.makedirs(chunk_dir, exist_ok=True)
-    log(f"Chunked render: {len(chunks)} chunks of ≤{config['max_segments_per_chunk']} segments")
-    duration = segments[-1]["end"]
+    duration = timeline.duration
+    log(f"Chunked render: {len(chunks)} chunks of "
+        f"<={config['max_segments_per_chunk']} segments")
     outputs_cfg = config.get("outputs") or [{"name": "render"}]
     names = [o["name"] for o in outputs_cfg]
 
@@ -485,65 +573,63 @@ def _render_chunked(project_dir, config, segments, audio, output_dir, profile):
                 chunk_paths[name].append(path)
 
         audio_path = None
-        if audio is not None:
+        if timeline.audio:
             audio_path = os.path.join(chunk_dir, "audio.m4a")
-            _render_audio(project_dir, config, audio, duration, profile, audio_path)
+            _render_audio(project_dir, config, timeline, duration, profile, audio_path)
 
+        findings = []
         output_paths = []
         for name in names:
             out_path = os.path.join(output_dir, f"{name}.mp4")
             output_paths.append(out_path)
+            joined = os.path.join(chunk_dir, f"joined_{name}.mp4")
+            _concat_chunks(chunk_paths[name], joined)
             tmp = _tmp_path(out_path)
-            _concat_chunks(chunk_paths[name], tmp)
             if audio_path:
-                muxed = tmp + ".muxed.mp4"
-                mux = ["ffmpeg", "-y", "-i", tmp, "-i", audio_path,
+                mux = ["ffmpeg", "-y", "-i", joined, "-i", audio_path,
                        "-map", "0:v", "-map", "1:a", "-c", "copy",
-                       "-movflags", "+faststart", muxed]
+                       "-movflags", "+faststart", tmp]
                 subprocess.run(mux, check=True, capture_output=True, timeout=3600)
-                os.remove(tmp)
-                tmp = muxed
-            # verify before rename (chunk boundaries are frame-exact by
-            # construction; the gate confirms the concatenation did not drift)
-            try:
-                verify(tmp, segments, config["fps"])
-            except VerificationError as e:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-                _fail(f"Render failed verification: {e}")
+            else:
+                os.replace(joined, tmp)
+            findings += _gate(tmp, timeline, config["fps"], duration, config,
+                              has_audio=audio_path is not None)
             os.replace(tmp, out_path)
-        log(f"Done → {', '.join(output_paths)}")
+        log(f"Done -> {', '.join(output_paths)}")
+        return findings
     finally:
         shutil.rmtree(chunk_dir, ignore_errors=True)
 
 
-def _render_project(project_dir, config, segments, audio, output_dir):
+def _render_project(project_dir, config, timeline, output_dir):
     """Compile and execute the render for a (snapped, materialized) timeline."""
-    duration = segments[-1]["end"]
+    duration = timeline.duration
     max_chunk = config.get("max_segments_per_chunk", 20)
-    transition_mode = config.get("transition_mode", "hard_cut")
-    if len(segments) > max_chunk and transition_mode == "hard_cut":
-        profile = _select_profile()
-        log(f"  Encoder: {profile.encoder}")
-        _render_chunked(project_dir, config, segments, audio, output_dir, profile)
-        return
-    if len(segments) > max_chunk:
-        log(f"  WARNING: {len(segments)} segments exceed max_segments_per_chunk "
-            f"({max_chunk}) with transition_mode '{transition_mode}'; "
-            "chunking requires hard_cut, rendering single-pass (memory unbounded)")
-    log("Compiling filtergraph...")
-    log("Probing hardware...")
+    chunkable = (len(timeline.video) == 1
+                 and not any(seg.get("transition")
+                             for seg in timeline.base.segments[1:]))
     profile = _select_profile()
+    log("Probing hardware...")
     log(f"  Encoder: {profile.encoder}")
+
+    if len(timeline.base.segments) > max_chunk and chunkable:
+        return _render_chunked(project_dir, config, timeline, output_dir, profile)
+    if len(timeline.base.segments) > max_chunk:
+        log(f"  WARNING: {len(timeline.base.segments)} segments exceed "
+            f"max_segments_per_chunk ({max_chunk}) with "
+            f"{len(timeline.video)} video track(s); rendering single-pass")
+
     ass_path = None
-    ass_content = build_ass(segments, config)
+    ass_content = build_ass(timeline.base.segments, config)
     if ass_content:
         ass_path = os.path.join(output_dir, "subtitles.ass")
         with open(ass_path, "w") as f:
             f.write(ass_content)
         log(f"  Subtitles: {ass_path}")
-    graph = compile_graph(config, segments, audio, project_dir, profile, ass_path)
-    duration = graph.duration  # post-transition span; the gate compares against this
+
+    log("Compiling filtergraph...")
+    graph = compile_graph(config, timeline, None, project_dir, profile, ass_path)
+    duration = graph.duration
 
     cmd = ["ffmpeg", "-y", *profile.extra_args]
     for arg_list in graph.input_args:
@@ -560,17 +646,19 @@ def _render_project(project_dir, config, segments, audio, output_dir):
             cmd += ["-map", graph.audio_maps[i], "-c:a", "aac"]
         if i == len(graph.outputs) - 1:
             cmd += ["-progress", "pipe:1"]
-        cmd.append(_tmp_path(out_path))  # atomic rename to final name on success
+        cmd.append(_tmp_path(out_path))
 
-    log(f"Rendering {duration:.1f}s → {', '.join(output_paths)}...")
+    has_audio = bool(graph.audio_maps)
+    log(f"Rendering {duration:.1f}s -> {', '.join(output_paths)}...")
     log("Running: " + " ".join(cmd))
-    _run_render(cmd, duration, output_paths, segments, config["fps"])
+    return _run_render(cmd, duration, output_paths, timeline, config["fps"],
+                       config, has_audio)
 
-
-# ── Beat-Detect Mode (legacy) ─────────────────────────────────────────────
 
 def generate_kinetic_sequence(audio_path, asset_dir, output_path):
+    """Legacy beat-detect mode: cut clips on detected beats, no cutlist."""
     import glob
+
     import librosa
     from moviepy import AudioFileClip, VideoFileClip, concatenate_videoclips
 
@@ -586,7 +674,6 @@ def generate_kinetic_sequence(audio_path, asset_dir, output_path):
 
     clips = []
     asset_idx = 0
-
     for duration in durations:
         target_asset = assets[asset_idx % len(assets)]
         src_clip = VideoFileClip(target_asset)
@@ -595,35 +682,46 @@ def generate_kinetic_sequence(audio_path, asset_dir, output_path):
         asset_idx += 1
 
     final = concatenate_videoclips(clips)
-    audio = AudioFileClip(audio_path).subclipped(beat_times[0], beat_times[len(durations)])
+    audio = AudioFileClip(audio_path).subclipped(
+        beat_times[0], beat_times[len(durations)])
     final = final.with_audio(audio)
     final.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac",
-                          ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"])
+                          ffmpeg_params=["-pix_fmt", "yuv420p",
+                                         "-movflags", "+faststart"])
 
-
-# ── CLI ────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Scythe - kinetic video rendering engine")
-    parser.add_argument("--project", "-p", help="Path to project directory (cut-list mode)")
-    parser.add_argument("--check-gpu", action="store_true", help="Print GPU capability report and exit")
-    parser.add_argument("--json", action="store_true", help="Machine mode: newline-delimited JSON events on stdout")
+    parser = argparse.ArgumentParser(
+        description="Scythe - a content and video editing engine")
+    parser.add_argument("--project", "-p",
+                        help="Path to project directory (cutlist mode)")
+    parser.add_argument("--check-gpu", action="store_true",
+                        help="Print GPU capability report and exit")
+    parser.add_argument("--json", action="store_true",
+                        help="Machine mode: newline-delimited JSON events on stdout")
+    parser.add_argument("--no-eval", action="store_true",
+                        help="Skip post-render evaluation (loudness, freeze, black)")
+    parser.add_argument("--strict", action="store_true",
+                        help="Treat evaluation warnings as errors")
+    parser.add_argument("--note", help="Note to append to the project log")
 
-    # Style overrides
-    parser.add_argument("--resolution", type=str, help="WxH e.g. 1920x1080 (overrides config)")
+    parser.add_argument("--resolution", type=str,
+                        help="WxH e.g. 1920x1080 (overrides config)")
     parser.add_argument("--fps", type=int, help="Output framerate")
-    parser.add_argument("--font", help="Font name (e.g. LiberationSans-Bold)")
+    parser.add_argument("--font", help="Font name (e.g. LiberationSans)")
     parser.add_argument("--font-size", type=int, help="Text font size in px")
     parser.add_argument("--audio-offset", type=float, help="Start N seconds into audio")
 
-    # Beat-detect mode
-    parser.add_argument("--audio", "-a", help="Path to audio file (beat-detect mode)")
-    parser.add_argument("--assets", help="Path to video_assets directory (beat-detect mode)")
+    parser.add_argument("--audio", "-a", help="Audio file (beat-detect mode)")
+    parser.add_argument("--assets", help="video_assets directory (beat-detect mode)")
     parser.add_argument("--out", "-o", help="Output path (beat-detect mode)")
 
     args = parser.parse_args()
 
     MACHINE = args.json or os.environ.get("NOX_JSON") == "1"
+    EVALUATE = not args.no_eval and os.environ.get("NOX_EVAL", "1") != "0"
+    STRICT = args.strict or os.environ.get("NOX_STRICT") == "1"
+    NOTE = args.note
 
     if args.check_gpu:
         check_gpu()
@@ -642,12 +740,12 @@ if __name__ == "__main__":
             font_size=args.font_size,
         )
     elif args.audio and args.assets:
-        out = args.out or "output_kinetic.mp4"
-        generate_kinetic_sequence(args.audio, args.assets, out)
+        generate_kinetic_sequence(args.audio, args.assets,
+                                  args.out or "output_kinetic.mp4")
     else:
         parser.print_help()
         print("\nExamples:")
         print("  python main.py --project projects/my-video")
         print("  python main.py --project projects/my-video --resolution 1920x1080")
-        print("  python main.py --project projects/my-video --font LiberationSans-Bold --font-size 52")
-        print("  python main.py --audio audio/track.wav --assets video_assets/ --out output.mp4")
+        print("  python main.py --project projects/my-video --strict --note 'v2 grade'")
+        print("  python main.py --audio audio/track.wav --assets clips/ --out out.mp4")
